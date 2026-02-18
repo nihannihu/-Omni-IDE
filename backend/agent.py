@@ -1,12 +1,14 @@
 import logging
 import torch
-from smolagents import CodeAgent, Tool, Model, ChatMessage, MessageRole, ChatMessageStreamDelta, ActionStep, ToolCall, ToolOutput, FinalAnswerStep
+from smolagents import CodeAgent, Tool, Model, ChatMessage, MessageRole, ChatMessageStreamDelta, ActionStep, ToolCall, ToolOutput, FinalAnswerStep, LocalPythonExecutor
 from smolagents.models import get_clean_message_list
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer, AutoProcessor, AutoModelForVision2Seq
 from threading import Thread, Lock as ThreadLock
 from PIL import Image
 import io
 import base64
+import os
+import webbrowser
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ class LocalQwenModel(Model):
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=2048,
                 temperature=0.7,
                 do_sample=True,
                 stop_strings=stop_sequences, # Transformers 4.39+
@@ -90,10 +92,12 @@ class LocalQwenModel(Model):
         generation_kwargs = dict(
             inputs, 
             streamer=streamer, 
-            max_new_tokens=512, 
+            max_new_tokens=2048, 
             temperature=0.7, 
             do_sample=True,
-            stop_strings=stop_sequences,
+            # ENFORCE STOP STRINGS TO PREVENT LOOPING (Crucial for 0.5B)
+            # The model hallucinates "Thought:" or "User:" after finishing code.
+            stop_strings=["Observation:", "User:", "Thought:", "Review:", "Code:", "Arguments:"],
             tokenizer=self.tokenizer
         )
         
@@ -105,6 +109,24 @@ class LocalQwenModel(Model):
             yield ChatMessageStreamDelta(
                 content=new_text
             )
+
+def safe_write(filename: str, content: str) -> str:
+    """
+    Safely writes content to a file on the Desktop.
+    Automatically handles folder creation and absolute paths.
+    """
+    desktop = r"C:\Users\nihan\Desktop"
+    # Ensure filename doesn't start with slash or backslash to avoid root confusion
+    filename = filename.lstrip("/").lstrip("\\")
+    
+    filepath = os.path.join(desktop, filename)
+    
+    # Create parent directories if they don't exist
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    
+    from pathlib import Path
+    Path(filepath).write_text(content, encoding='utf-8')
+    return filepath
 
 class VisionTool(Tool):
     name = "analyze_screen"
@@ -198,11 +220,11 @@ final_answer('''{response}''')
 
 class OmniAgent:
     def __init__(self):
-        logger.info("Initializing Real AI Agent (Qwen2.5-Coder-1.5B) with Custom 4-bit Wrapper...")
+        logger.info("Initializing Real AI Agent (Qwen2.5-Coder-0.5B) with Custom 4-bit Wrapper...")
         
         try:
-            # Initialize our custom model wrapper with the SMALLER 1.5B model
-            self.model = LocalQwenModel("Qwen/Qwen2.5-Coder-1.5B-Instruct")
+            # Initialize our custom model wrapper with the SMALLER 0.5B model for STABILITY
+            self.model = LocalQwenModel("Qwen/Qwen2.5-Coder-0.5B-Instruct")
             
             # Initialize Vision Model (SmolVLM-500M-Instruct) - CPU Mode (Fallback for Stability)
             # GPU/cuDNN is causing hard crashes ("Could not load symbol cudnnGetLibConfig")
@@ -228,7 +250,7 @@ class OmniAgent:
             self.vision_tool = VisionTool(self.vision_model, self.vision_processor, get_latest_image_safe, self.image_lock)
             
             # 1.5B model needs VERY explicit instructions to not just chat
-            SYSTEM_PROMPT_ADDITION = """
+            SYSTEM_PROMPT_ADDITION = r"""
 You are a Python coding assistant, created by Nihan.
 You MUST follow this format STRICTLY:
 
@@ -248,85 +270,58 @@ IMPORTANT RULES:
 - If asked about yourself, just return the string.
 - CRITICAL RULE: If the user asks you to look at the screen, see the screen, or describe the screen, you MUST immediately call the `analyze_screen` tool. DO NOT write placeholder code. DO NOT guess what is on the screen. You are blind until you call `analyze_screen`.
 - CRITICAL RULE: `analyze_screen` is a BUILT-IN function. DO NOT import it. Just call `analyze_screen(...)`.
+- SYSTEM INSTRUCTION: When tasked with creating HTML, CSS, or any web files, DO NOT `import html` or `import css`.
+- CRITICAL FILE WRITING RULE: The function 'open()' is FORBIDDEN and will CRASH.
+- To create ANY file, you MUST use the built-in function `safe_write(filename, content)`.
+- `safe_write` automatically saves files to the Desktop. DO NOT try to calculate paths yourself.
+
+PATTERN: 
+filepath = safe_write('folder/file.html', '<html>...</html>')
+
+- CRITICAL BROWSER RULE: To open a file in the browser, usage:
+import webbrowser
+webbrowser.open('file://' + filepath)
+
+- SPEED OPTIMIZATION: You are in TURBO MODE.
+  1. "Thought" should be ONE short sentence.
+  2. Generate code IMMEDIATELY.
+  3. Solve the entire task in a SINGLE turn. Do not loop.
+
+- MANDATORY CODE TEMPLATE:
+import os
+import webbrowser
+from pathlib import Path
 
 EXAMPLES:
 
-User: "Calculate the factorial of 5 and tell me who created you."
+User: "Create a folder named 'project' and a file 'index.html' inside it."
 You:
-Thought: I need to calculate 5! and then state my creator. I will combine both into one answer.
+Thought: I will use safe_write to create the file and folder automatically.
 ```python
-import math
-fact = math.factorial(5)
-creator = "Nihan"
-final_answer(f"The factorial of 5 is {fact}. I was created by {creator}.")
+html_content = "<h1>Hello</h1>"
+# safe_write handles the folder 'project' automatically
+path = safe_write('project/index.html', html_content)
+final_answer(f"Created file at {path}")
 ```
 
-User: "Calculate the factorial of 5"
+User: "Write a story to story.txt"
 You:
-Thought: I need to calculate the factorial of 5 using the math library.
+Thought: I will use safe_write to save the story.
 ```python
-import math
-result = math.factorial(5)
-final_answer(result)
+content = "Once upon a time..."
+path = safe_write('story.txt', content)
+final_answer(path)
 ```
 
-User: "What is the current working directory?"
+User: "Create a login page and open it."
 You:
-Thought: I will use the os library to get the current working directory.
+Thought: I will create the html file and open it in the browser.
 ```python
-import os
-cwd = os.getcwd()
-final_answer(cwd)
-```
-
-User: "Reverse the string 'hello'"
-You:
-Thought: I will reverse the string using slice notation.
-```python
-text = "hello"
-reversed_text = text[::-1]
-final_answer(reversed_text)
-```
-
-User: "Filter the list [1, 2, 3, 4, 5] to keep only even numbers"
-You:
-Thought: I will use a list comprehension to filter for even numbers.
-```python
-numbers = [1, 2, 3, 4, 5]
-even_numbers = [n for n in numbers if n % 2 == 0]
-final_answer(even_numbers)
-```
-
-User: "What is today's date?"
-You:
-Thought: I will use the datetime library to get the current date.
-```python
-import datetime
-today = datetime.date.today()
-final_answer(today)
-```
-
-User: "Write 'Hello World' to a file named 'output.txt'"
-You:
-Thought: I will open the file in write mode and write the string.
-```python
-with open('output.txt', 'w') as f:
-    f.write('Hello World')
-final_answer("File written successfully")
-```
-
-User: "Calculate the 10th Fibonacci number"
-You:
-Thought: I will use an iterative approach to find the 10th Fibonacci number.
-```python
-def fibonacci(n):
-    a, b = 0, 1
-    for _ in range(n):
-        a, b = b, a + b
-    return a
-
-result = fibonacci(10)
-final_answer(result)
+html = "<html><body>Login</body></html>"
+path = safe_write('login.html', html)
+import webbrowser
+webbrowser.open('file://' + path)
+final_answer("Page opened.")
 ```
 
 DO NOT write conversational filler. JUST THE THOUGHT AND CODE.
@@ -344,11 +339,18 @@ DO NOT write conversational filler. JUST THE THOUGHT AND CODE.
                 description=None,
                 prompt_templates=None,
                 instructions=SYSTEM_PROMPT_ADDITION,
-                additional_authorized_imports=["os", "datetime", "math", "sympy"],
-                stream_outputs=True # Enable real-time token streaming
+                additional_authorized_imports=["os", "datetime", "math", "sympy", "random", "time", "shutil", "webbrowser", "subprocess", "ntpath", "posixpath", "pathlib", "html"],
+                stream_outputs=True, # Enable real-time token streaming
+                executor_kwargs={
+                    "additional_functions": {
+                        "webbrowser": webbrowser,
+                        "os": os,
+                        "safe_write": safe_write
+                    }
+                }
             )
             
-            logger.info("Real AI Agent initialized successfully (1.5B 4-bit Custom).")
+            logger.info("Real AI Agent initialized successfully (0.5B 4-bit Custom).")
             
         except Exception as e:
             logger.error(f"Failed to initialize AI Agent: {e}")

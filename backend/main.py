@@ -2,6 +2,8 @@ import asyncio
 import base64
 import json
 import logging
+import os
+import webbrowser
 from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -35,6 +37,11 @@ async def startup_event():
     transcriber = AudioTranscriber()
     agent = OmniAgent()
     logger.info("Models initialized.")
+    logger.info("Application startup complete.")
+
+@app.get("/")
+def read_root():
+    return {"status": "online", "agent": "OmniAgent"}
 
 @app.websocket("/ws/omni")
 async def websocket_endpoint(websocket: WebSocket):
