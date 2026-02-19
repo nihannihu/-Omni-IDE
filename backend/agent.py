@@ -23,35 +23,46 @@ logger = logging.getLogger(__name__)
 # SECURITY SANDBOX & FILE SYSTEM WRAPPERS
 # ------------------------------------------------------------------
 
+# This is set by main.py when the user changes directory
+WORKING_DIRECTORY = None
+
 def get_desktop_path():
     from pathlib import Path
     return Path(r"C:\Users\nihan\Desktop")
 
+def get_base_path():
+    """Returns WORKING_DIRECTORY. Raises error if no folder is open."""
+    from pathlib import Path
+    if WORKING_DIRECTORY:
+        return Path(WORKING_DIRECTORY)
+    raise ValueError("No folder is open. Please open a folder first using the Open Folder button.")
+
 def safe_write(filename: str, content: str) -> str:
-    """Safely writes content to a file on the Desktop."""
-    desktop = get_desktop_path()
+    """Safely writes content to a file in the WORKING_DIRECTORY."""
+    base = get_base_path()
     filename = filename.lstrip("/").lstrip("\\")
-    filepath = (desktop / filename).resolve()
+    filepath = (base / filename).resolve()
     
-    if not str(filepath).startswith(str(desktop.resolve())):
+    if not str(filepath).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (Path Traversal): {filename}")
         
     filepath.parent.mkdir(parents=True, exist_ok=True)
     filepath.write_text(content, encoding='utf-8')
+    logger.info(f"safe_write: Created {filepath}")
     return str(filepath)
 
 def safe_open(filepath_str, mode='r', **kwargs):
-    """Safe wrapper for open() rooted to Desktop."""
+    """Safe wrapper for open() rooted to WORKING_DIRECTORY."""
     from pathlib import Path
     import builtins
-    desktop = get_desktop_path()
+    base = get_base_path()
     filepath = Path(filepath_str)
     
     if not filepath.is_absolute():
-        filepath = desktop / filepath
+        filepath = base / filepath
     filepath = filepath.resolve()
     
-    if any(m in mode for m in ('w', 'a', 'x')) and not str(filepath).startswith(str(desktop.resolve())):
+    if any(m in mode for m in ('w', 'a', 'x')) and not str(filepath).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (Write Outside Sandbox): {filepath}")
         
     if any(m in mode for m in ('w', 'a', 'x')):
@@ -60,20 +71,48 @@ def safe_open(filepath_str, mode='r', **kwargs):
     return builtins.open(str(filepath), mode, **kwargs)
 
 def safe_mkdir(path_str, *args, **kwargs):
-    """Safe wrapper for directory creation rooted to Desktop."""
+    """Safe wrapper for directory creation rooted to WORKING_DIRECTORY."""
     from pathlib import Path
-    desktop = get_desktop_path()
+    base = get_base_path()
     path = Path(path_str)
     
     if not path.is_absolute():
-        path = desktop / path
+        path = base / path
     path = path.resolve()
     
-    if not str(path).startswith(str(desktop.resolve())):
+    if not str(path).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (mkdir Outside Sandbox): {path}")
     
     path.mkdir(parents=True, exist_ok=True)
     return str(path)
+
+def safe_delete(filename):
+    """Delete a file from the working directory (sandboxed)."""
+    from pathlib import Path
+    import os
+    base = get_base_path()
+    path = Path(filename)
+    if not path.is_absolute():
+        path = base / path
+    path = path.resolve()
+    
+    if not str(path).startswith(str(base.resolve())):
+        raise ValueError(f"Security Block (Delete Outside Sandbox): {path}")
+    
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+    
+    if path.is_file():
+        os.remove(path)
+        logger.info(f"Deleted file: {path}")
+        return f"Deleted: {filename}"
+    elif path.is_dir():
+        import shutil
+        shutil.rmtree(path)
+        logger.info(f"Deleted directory: {path}")
+        return f"Deleted directory: {filename}"
+    else:
+        raise ValueError(f"Cannot delete: {path}")
 
 def open_in_browser(filepath_str):
     """Opens a file in the default web browser (Desktop rooted)."""
@@ -245,26 +284,104 @@ class OmniAgent:
             
             self.vision_tool = VisionTool(get_latest_image)
             
-            # PROMPT: Enforcing Sandbox & Vision & Persona
+            # PROMPT: Ultra-Aggressive Direct Execution Engine
             SYSTEM_PROMPT = r"""
-You are a Senior Python Developer and AI Assistant, created by Nihan Nihu.
-If asked "Who created you?", always answer "I was created by Nihan Nihu."
+You are a Senior Full-Stack Developer and AI Coding Engine, created by Nihan Nihu.
+CRITICAL RULE: You are a File Creation Engine.
+When generating code, you MUST immediately write it to the disk using pathlib.
 
-RULES:
-1. **Security**: SANDBOXED. No `os`, `subprocess`. Only Desktop access.
-2. **Tools**:
-   - `safe_write`, `safe_mkdir`, `safe_open` for files.
-   - `analyze_screen(question)`: Call this to SEE the user's screen!
-   - `create_web_page(...)`: Use for generic pages.
-3. **Coding**:
-   - For CUSTOM sites, write HTML/CSS manually using `safe_write`.
-   - Always end with `final_answer(variable)`.
+CORRECT PATTERN:
+from pathlib import Path
+Path('index.html').write_text('...content...', encoding='utf-8')
 
-EXAMPLE (Vision):
-Thought: User asked what's on screen.
+INCORRECT PATTERN (DO NOT DO THIS):
+html_content = '...content...' # This is useless! Write it to disk!
+
+If asked "Who created you?", answer "I was created by Nihan Nihu."
+
+=== ABSOLUTE RULES (VIOLATION = FAILURE) ===
+
+RULE 1 - FILE CREATION (when user says "create", "make", "build"):
+  - Call `safe_write(filename, content)` DIRECTLY with the full file content.
+  - DO NOT assign to variables. DO NOT show in markdown blocks.
+  - After writing: `final_answer("DONE: filename1.html, filename2.css")`
+
+RULE 2 - FILE EDITING (when user says "edit", "modify", "add", "change", "update", "fix"):
+  THIS IS THE MOST IMPORTANT RULE. To EDIT an existing file you MUST:
+  Step 1: READ the existing file content:
+    `existing = safe_open("filename.html", "r").read()`
+  Step 2: MODIFY the content (add/change/remove what the user requested)
+  Step 3: WRITE the modified content back:
+    `safe_write("filename.html", modified_content)`
+  Step 4: `final_answer("DONE: filename.html")`
+  
+  WARNING: You MUST include ALL the original content plus your changes.
+  If you only write new content, you will DELETE the original file content!
+
+RULE 3 - RESPONSE FORMAT (MANDATORY):
+  - ALWAYS end with: `final_answer("DONE: file1.ext, file2.ext")`
+  - List ALL files you created or modified.
+  - NEVER say just "Done!" — you MUST include the filenames after "DONE:"
+
+RULE 4 - TOOLS AVAILABLE:
+  - `safe_write(filename, content)` - Create or overwrite a file
+  - `safe_open(path, mode)` - Open/read a file (mode="r" for reading)
+  - `safe_delete(filename)` - Delete a file or directory
+  - `safe_mkdir(dirname)` - Create a directory
+  - `analyze_screen(question)` - See the user's screen
+
+RULE 5 - FILE DELETION (when user says "delete", "remove"):
+  - Call `safe_delete(filename)` for each file to delete.
+  - After deleting: `final_answer("DELETED: filename1.html, filename2.css")`
+
+=== CORRECT EXAMPLES ===
+
+EXAMPLE 1 - CREATE new files:
+User: "Create a login page"
 ```python
-description = analyze_screen("Describe the UI layout")
-final_answer(description)
+safe_write("login.html", '''<!DOCTYPE html>
+<html><head><title>Login</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="container"><h1>Login</h1>
+<form><input type="email" placeholder="Email"><input type="password" placeholder="Password">
+<button type="submit">Sign In</button></form></div></body></html>''')
+
+safe_write("style.css", '''body { background: linear-gradient(135deg, #667eea, #764ba2); min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; }
+.container { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); padding: 40px; border-radius: 16px; }
+button { padding: 12px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; }''')
+
+final_answer("DONE: login.html, style.css")
+```
+
+EXAMPLE 2 - EDIT an existing file:
+User: "Edit login.html, add a Register button and make buttons blue"
+```python
+# Step 1: READ existing content
+existing_html = safe_open("login.html", "r").read()
+
+# Step 2: MODIFY - replace the closing </form> with new button + closing tag
+modified_html = existing_html.replace(
+    '</form>',
+    '<button type="button" class="register-btn">Register</button>\n</form>'
+)
+
+# Step 3: WRITE back
+safe_write("login.html", modified_html)
+
+# Also update CSS
+existing_css = safe_open("style.css", "r").read()
+modified_css = existing_css + '''
+.register-btn { padding: 12px; background: #2196F3; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; }
+button { background: #2196F3 !important; }'''
+safe_write("style.css", modified_css)
+
+final_answer("DONE: login.html, style.css")
+```
+
+=== WRONG (NEVER DO THIS) ===
+```python
+html = '''<!DOCTYPE html>...'''  # WRONG! Do not assign to variables!
+print(content)                    # WRONG! Do not print content!
+final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.html"
 ```
 """
             self.agent = CodeAgent(
@@ -280,10 +397,11 @@ final_answer(description)
                     "additional_functions": {
                         "safe_write": safe_write,
                         "safe_open": safe_open,
+                        "safe_delete": safe_delete,
                         "safe_mkdir": safe_mkdir,
                         "open_in_browser": open_in_browser,
                         "create_web_page": create_web_page,
-                        "VisionTool": VisionTool # expose class if needed by smolagents internals? likely not
+                        "VisionTool": VisionTool
                     }
                 }
             )
@@ -299,32 +417,37 @@ final_answer(description)
             self.latest_image = base64_image
 
     def execute_stream(self, task: str):
-        logger.info(f"Agent thinking on task: {task}")
+        """Execute a task and yield ONLY the clean final answer to the frontend.
+        All internal steps (Thought, ToolCall, Observation) are logged to server only."""
+        logger.info(f"Agent task: {task}")
+        final_answer = None
         try:
             for step in self.agent.run(task, stream=True):
-                # logger.info(f"Stream Step: {type(step)}")
-                
-                if isinstance(step, ChatMessageStreamDelta):
-                    if step.content:
-                        yield step.content
-                elif isinstance(step, ToolCall):
-                    yield f"\n> Executing tool: {step.name}...\n"
-                elif hasattr(step, "observation") and step.observation:
-                    yield f"\nObservation:\n{step.observation}\n"
+                # Log internals for debugging (NOT sent to frontend)
+                if isinstance(step, ToolCall):
+                    logger.info(f"  Tool: {step.name}")
                 elif isinstance(step, ActionStep):
                     if step.error:
-                        yield f"\n[Error]: {step.error}\n"
+                        logger.error(f"  Step Error: {step.error}")
                     if hasattr(step, "observations") and step.observations:
-                         yield f"\nObservation:\n{step.observations}\n"
+                        logger.info(f"  Observation: {step.observations[:200]}...")
                     if step.is_final_answer and step.action_output is not None:
-                        yield f"\nFinal Answer: {step.action_output}\n"
+                        final_answer = str(step.action_output)
                 elif isinstance(step, FinalAnswerStep):
-                    yield f"\nFinal Answer: {step.output}\n"
-                elif isinstance(step, ToolOutput): # Explicit check just in case
-                    yield f"\nObservation:\n{step.observation}\n"
+                    final_answer = str(step.output)
+                elif isinstance(step, ToolOutput):
+                    logger.info(f"  Tool Output: {str(step.observation)[:200]}...")
+                # ChatMessageStreamDelta is just intermediate thinking - skip
+
+            if final_answer:
+                yield final_answer
+            else:
+                yield "Task completed."
+                
         except GeneratorExit:
             logger.info("Client disconnected.")
             return
         except Exception as e:
             logger.error(f"Execution Error: {e}")
             yield f"Error: {e}"
+

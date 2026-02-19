@@ -12,6 +12,7 @@ requests
 python-dotenv
 numpy
 soundfile
+aiofiles
 # Safe Eval
 python-multipart
 duckduckgo-search

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omni-IDE</title>
+    <!-- Favicon to prevent 404 -->
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
+    <link rel="stylesheet" href="/static/styles.css?v=12">
+</head>
+
+<body>
+    <div id="app-container">
+        <!-- PANE 1: File Explorer (15%) -->
+        <div id="file-pane">
+            <div id="file-header">EXPLORER</div>
+
+            <!-- Folder Navigation -->
+            <div id="folder-nav"
+                style="padding: 10px; border-bottom: 1px solid #333; display: flex; flex-direction: column; gap: 5px;">
+                <button id="change-dir-btn"
+                    style="width: 100%; padding: 8px; background: #007acc; color: white; border: none; cursor: pointer; border-radius: 4px; font-size: 13px; font-weight: 600;">📂
+                    Open Folder</button>
+                <button id="close-dir-btn"
+                    style="width: 100%; padding: 5px; background: #333; color: #ccc; border: 1px solid #444; cursor: pointer; border-radius: 4px; font-size: 11px; margin-top: 5px; display: none;">
+                    Close Folder</button>
+                <div id="current-path"
+                    style="font-size: 10px; color: #888; word-break: break-all; font-family: monospace;"></div>
+            </div>
+
+            <div id="file-list">
+                <!-- Javascript will populate this -->
+            </div>
+        </div>
+
+        <!-- PANE 2: AI Chat Interface (25%) -->
+        <div id="chat-pane">
+            <div id="chat-header">
+                <h2>Omni-Agent</h2>
+                <div class="status-indicator online"></div>
+            </div>
+            <div id="chat-history">
+                <div class="message assistant">
+                    <div class="bubble">
+                        Hello! I am your autonomous coding assistant. Open a folder and ask me to create, edit, or
+                        manage files.
+                    </div>
+                </div>
+            </div>
+            <div id="chat-input-area">
+                <textarea id="user-input" placeholder="Type a command..." rows="2" autocomplete="off"></textarea>
+                <button id="send-btn">Send</button>
+            </div>
+        </div>
+
+        <!-- PANE 3: Monaco Editor (60%) -->
+        <div id="editor-pane">
+            <div id="tab-bar">
+                <!-- Javascript will populate tabs -->
+            </div>
+            <div id="editor-header">
+                <div id="editor-toolbar-spacer"></div>
+                <button id="run-btn">▶ Run Code</button>
+            </div>
+            <div id="editor-container"></div>
+            <!-- OUTPUT TERMINAL -->
+            <div id="terminal-pane">
+                <div id="terminal-header">
+                    <span>TERMINAL</span>
+                    <span id="terminal-clear" title="Clear Output">🚫</span>
+                </div>
+                <pre id="terminal-content">Waiting for output...</pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monaco Editor Loader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.33.0/min/vs/loader.min.js"></script>
+    <!-- App Logic (cache-busted) -->
+    <script src="/static/script.js?v=12"></script>
+</body>
+
+</html>
