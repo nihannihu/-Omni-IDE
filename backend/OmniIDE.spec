@@ -1,12 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('static', 'static'), ('.env', '.')]
+binaries = []
+hiddenimports = ['uvicorn', 'engineio.async_drivers.threading']
+tmp_ret = collect_all('smolagents')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['desktop.py'],
     pathex=[],
-    binaries=[],
-    datas=[('static', 'static'), ('.env', '.')],
-    hiddenimports=['uvicorn', 'engineio.async_drivers.threading', 'smolagents'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -86,34 +86,52 @@ async def close_folder():
     return {"status": "closed"}
 
 @app.get("/api/files")
-async def list_files():
-    """List files in the current WORKING_DIRECTORY."""
+async def list_files(subpath: str = ""):
+    """List files in the current WORKING_DIRECTORY, optionally in a subpath."""
     global WORKING_DIRECTORY
     files = []
     # Define safe extensions to show
-    SAFE_EXTENSIONS = {'.py', '.txt', '.md', '.html', '.css', '.js', '.json', '.env'}
-    IGNORED_DIRS = {'venv', 'venv_gpu', 'node_modules', '__pycache__', '.git', '.idea', '.vscode'}
+    SAFE_EXTENSIONS = {'.py', '.txt', '.md', '.html', '.css', '.js', '.json', '.env',
+                       '.yaml', '.yml', '.toml', '.cfg', '.ini', '.csv', '.xml',
+                       '.tsx', '.jsx', '.ts', '.scss', '.less', '.svg', '.sh', '.bat',
+                       '.dockerfile', '.gitignore', '.editorconfig', '.prettierrc'}
+    IGNORED_DIRS = {'venv', 'venv_gpu', 'node_modules', '__pycache__', '.git', '.idea', '.vscode', 'dist', 'build', '.next'}
     
     try:
         if not WORKING_DIRECTORY:
             return {"files": [], "current_dir": None, "no_directory": True}
         
-        # Scan WORKING_DIRECTORY instead of '.'
-        with os.scandir(WORKING_DIRECTORY) as entries:
+        # Resolve the target directory (base + optional subpath)
+        base_path = Path(WORKING_DIRECTORY).resolve()
+        if subpath:
+            target_path = (base_path / subpath).resolve()
+            # Security: prevent path traversal outside the working directory
+            if not str(target_path).startswith(str(base_path)):
+                raise HTTPException(status_code=403, detail="Access denied: Path traversal attempt.")
+        else:
+            target_path = base_path
+        
+        if not target_path.exists() or not target_path.is_dir():
+            raise HTTPException(status_code=404, detail=f"Directory not found: {subpath}")
+        
+        # Scan the target directory
+        with os.scandir(target_path) as entries:
             for entry in entries:
-                if entry.name.startswith('.') and entry.name != '.env': 
+                if entry.name.startswith('.') and entry.name not in {'.env', '.gitignore', '.editorconfig', '.prettierrc'}: 
                     continue
                 
-                if entry.is_file() and any(entry.name.endswith(ext) for ext in SAFE_EXTENSIONS):
+                if entry.is_file() and (any(entry.name.endswith(ext) for ext in SAFE_EXTENSIONS) or '.' not in entry.name):
                     files.append({"name": entry.name, "type": "file"})
                 elif entry.is_dir() and entry.name not in IGNORED_DIRS:
                     files.append({"name": entry.name, "type": "directory"})
         
-        # Sort directories first, then files
-        files.sort(key=lambda x: (x['type'] != 'directory', x['name']))
-        return {"files": files, "current_dir": WORKING_DIRECTORY}
+        # Sort directories first, then files alphabetically
+        files.sort(key=lambda x: (x['type'] != 'directory', x['name'].lower()))
+        return {"files": files, "current_dir": WORKING_DIRECTORY, "subpath": subpath}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error listing files in {WORKING_DIRECTORY}: {e}")
+        logger.error(f"Error listing files in {WORKING_DIRECTORY}/{subpath}: {e}")
         return {"files": [], "error": str(e)}
 
 @app.get("/api/read")
@@ -232,23 +250,197 @@ async def run_code(request: CodeRequest):
     global WORKING_DIRECTORY
     code = request.code
     try:
-        # Run code in a subprocess
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
+        # Determine the correct Python executable
+        # In a frozen PyInstaller build, sys.executable is OmniIDE.exe (no external libs)
+        # So we fall back to the host system's 'python' command.
+        
+        env = os.environ.copy()
+        python_cmd = sys.executable
+        hunter_log = []
+        
+        if getattr(sys, 'frozen', False):
+            # Strip PyInstaller sandbox variables so system Python can find global libraries (like Pygame)
+            env.pop('PYTHONHOME', None)
+            env.pop('PYTHONPATH', None)
+            env.pop('LD_LIBRARY_PATH', None)
+            # CRITICAL: PyInstaller prepends _MEIPASS to PATH, which corrupts pip build tools. We must strip it.
+            meipass = getattr(sys, '_MEIPASS', '')
+            if meipass:
+                clean_path = [p for p in env.get('PATH', '').split(os.pathsep) if not p.startswith(meipass)]
+                env['PATH'] = os.pathsep.join(clean_path)
+            
+            # The user might have experimental Python versions (like 3.14) on their PATH as the default 'python'
+            # Experimental versions lack pre-compiled wheels (like pygame).
+            # We must actively hunt for a stable Python version (3.12, 3.11, 3.10) first.
+            import shutil
+            stable_found = False
+            
+            # 1. Try explicit version commands (common on Linux/Mac, sometimes Windows)
+            for version in ["python3.12", "python3.11", "python3.10", "python3.9", "python3.8", "python3"]:
+                path = shutil.which(version, path=env.get('PATH'))
+                hunter_log.append(f"shutil.which({version}) -> {path}")
+                if path and "WindowsApps" not in path and "windowsapps" not in path.lower():
+                    python_cmd = path
+                    stable_found = True
+                    break
+                elif path:
+                    hunter_log.append(f"Rejected alias -> {path}")
+            
+            # 2. On Windows, explicit versions are rarely on PATH. Use the 'py' launcher to specifically target stable versions.
+            py_path = shutil.which("py", path=env.get('PATH')) or r"C:\Windows\py.exe"
+            hunter_log.append(f"py_path resolved -> {py_path}")
+            if not stable_found and os.path.exists(py_path):
+                for version in ["-3.12", "-3.11", "-3.10", "-3.9", "-3.8", "-3"]:
+                    try:
+                        # Check if this version exists via the launcher, using the cleaned environment!
+                        result = subprocess.run([py_path, version, "-c", "import sys"], capture_output=True, text=True, env=env)
+                        hunter_log.append(f"Tested [py {version}] -> returncode: {result.returncode}")
+                        if result.returncode == 0:
+                            # Instead of a bare executable, we return a list for Popen
+                            python_cmd = [py_path, version]
+                            stable_found = True
+                            break
+                    except Exception as e:
+                        hunter_log.append(f"Tested [py {version}] -> Exception: {e}")
+                        pass
+                        
+            # 3. Locate the first valid python.exe on PATH that is NOT the Windows Store alias
+            if not stable_found:
+                env_path = env.get("PATH", "")
+                for p in env_path.split(os.pathsep):
+                    exe_path = os.path.join(p, "python.exe")
+                    if os.path.exists(exe_path):
+                        if "WindowsApps" not in exe_path and "windowsapps" not in exe_path.lower():
+                            # Verify the python actually executes (the Store alias exits with code 9009 or fails)
+                            try:
+                                proc = subprocess.run([exe_path, "-c", "pass"], capture_output=True, env=env)
+                                hunter_log.append(f"Tested PATH EXE {exe_path} -> returncode: {proc.returncode}")
+                                if proc.returncode == 0:
+                                    python_cmd = exe_path
+                                    stable_found = True
+                                    break
+                            except Exception as e:
+                                hunter_log.append(f"Tested PATH EXE {exe_path} -> Exception: {e}")
+                                pass
+                        else:
+                            hunter_log.append(f"Skipped PATH EXE (WindowsApps) -> {exe_path}")
+
+            # 4. Aggressive Absolute Path Scanning for Windows
+            if not stable_found and os.name == 'nt':
+                common_dirs = [
+                    os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python"),
+                    os.path.expandvars(r"%PROGRAMFILES%\Python"),
+                    os.path.expandvars(r"%PROGRAMFILES(x86)%\Python"),
+                    r"C:\Python312", r"C:\Python311", r"C:\Python310"
+                ]
+                for base_dir in common_dirs:
+                    if os.path.exists(base_dir):
+                        for sub in os.listdir(base_dir):
+                            if sub.lower().startswith("python"):
+                                exe_path = os.path.join(base_dir, sub, "python.exe")
+                                if os.path.exists(exe_path):
+                                    try:
+                                        proc = subprocess.run([exe_path, "-c", "pass"], capture_output=True, env=env)
+                                        hunter_log.append(f"Tested ABS EXE {exe_path} -> returncode: {proc.returncode}")
+                                        if proc.returncode == 0:
+                                            python_cmd = exe_path
+                                            stable_found = True
+                                            break
+                                    except Exception as e:
+                                        hunter_log.append(f"Tested ABS EXE {exe_path} -> Exception: {e}")
+                                        pass
+                    if stable_found:
+                        break
+
+            if not stable_found:
+                # 5. Total fallback string (which we know might trigger the store alias, but better than crashing Python)
+                hunter_log.append("WARNING: FAILED ALL HUNTER CHECKS. FALLING BACK TO 'python' STRING.")
+                python_cmd = "python"
+            
+        # Handle python_cmd being a string or a list (from py launcher)
+        base_cmd = python_cmd if isinstance(python_cmd, list) else [python_cmd]
+        
+        proc = subprocess.Popen(
+            base_cmd + ["-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=10,
-            cwd=WORKING_DIRECTORY # Execute in current working dir
+            cwd=WORKING_DIRECTORY,
+            env=env
         )
-        return {
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-            "returncode": result.returncode
-        }
-    except subprocess.TimeoutExpired:
-        return {"stdout": "", "stderr": "Error: Execution timed out (10s limit).", "returncode": -1}
+        
+        try:
+            # Wait up to 2.5 seconds for short scripts (e.g. calculation, print)
+            stdout, stderr = proc.communicate(timeout=2.5)
+            
+            # --- AUTO-PIP DEPENDENCY MANAGER ---
+            if proc.returncode != 0 and "ModuleNotFoundError: No module named" in stderr:
+                import re
+                match = re.search(r"No module named '([^']+)'", stderr)
+                if match:
+                    missing_module = match.group(1)
+                    stdout += f"\n[⚙️ AUTO-PIP] Missing module '{missing_module}' detected!\n"
+                    
+                    # Add diagnostic info about which python pip is actually using
+                    ident_proc = subprocess.run(base_cmd + ["-c", "import sys; print(f'Target Python: {sys.executable} | Version: {sys.version}')"], capture_output=True, text=True, env=env)
+                    stdout += f"[⚙️ AUTO-PIP] {ident_proc.stdout.strip()}\n"
+                    stdout += f"[⚙️ AUTO-PIP] Installing '{missing_module}' (Pre-compiled Binary). Please wait...\n"
+                    
+                    try:
+                        # 1. Upgrade core build tools
+                        subprocess.run(base_cmd + ["-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], capture_output=True, env=env)
+                        
+                        # 2. Force install the binary wheel with VERBOSE output to see why it rejects wheels
+                        pip_proc = subprocess.run(
+                            base_cmd + ["-m", "pip", "install", missing_module, "--only-binary=:all:", "-v"],
+                            capture_output=True,
+                            text=True,
+                            env=env
+                        )
+                        if pip_proc.returncode == 0:
+                            stdout += f"\n✅ [AUTO-PIP] Successfully installed '{missing_module}'!\n"
+                            stdout += f"👉 [AUTO-PIP] Please click 'Run Code' again to execute your script.\n"
+                        else:
+                            stdout += f"\n❌ [AUTO-PIP] Failed to install '{missing_module}'.\n"
+                            stderr += f"\n--- PIP INSTALL ERROR ---\n{pip_proc.stderr}\n"
+                            
+                            # Give the user a hint if they are running an experimental Python version
+                            if "3.13" in ident_proc.stdout or "3.14" in ident_proc.stdout:
+                                stdout += f"\n💡 HINT: Your system Python is very new. Pre-compiled binaries for '{missing_module}' might not exist yet. Please install Python 3.12 for maximum compatibility.\n"
+
+                    except Exception as e:
+                        stdout += f"\n❌ [AUTO-PIP] Error running pip: {e}\n"
+            elif proc.returncode != 0:
+                # Add diagnostics for other failures
+                diag_code = "import sys,os; print(f'\\n--- DIAGNOSTICS ---\\nExecutable: {sys.executable}\\nSysPath: {sys.path}\\nEnviron: PYTHONPATH={os.environ.get(\\'PYTHONPATH\\', \\'None\\')}')"
+                diag_proc = subprocess.run(base_cmd + ["-c", diag_code], capture_output=True, text=True, env=env)
+                stderr += diag_proc.stdout
+            # -----------------------------------
+            
+            if proc.returncode != 0 and hunter_log:
+                stderr += "\n\n--- [IDE DIAGNOSTICS] PYTHON HUNTER TRACE ---\n" + "\n".join(hunter_log) + "\n"
+
+            return {
+                "stdout": stdout,
+                "stderr": stderr,
+                "returncode": proc.returncode
+            }
+        except subprocess.TimeoutExpired:
+            # For long-running apps (like Pygame or GUI), return early so UI doesn't hang.
+            # We do NOT kill the process; it lives on in the background.
+            return {
+                "stdout": "🚀 Process launched and running in the background (GUI/Server)...",
+                "stderr": "",
+                "returncode": 0
+            }
+            
     except Exception as e:
-        return {"stdout": "", "stderr": f"System Error: {str(e)}", "returncode": -1}
+        logger.error(f"Run code error: {e}")
+        error_msg = str(e)
+        if hunter_log:
+            error_msg += "\n\n--- [IDE DIAGNOSTICS] PYTHON HUNTER TRACE ---\n" + "\n".join(hunter_log) + "\n"
+        # If the code itself fails, return the error
+        return {"stdout": "", "stderr": error_msg, "returncode": -1}
 
 # --- Agent Logic (Robust REST Endpoint) ---
 from agent import OmniAgent

@@ -1,3 +1,21 @@
+import sys
+import os
+
+# --- HOTFIX: PyInstaller sys.executable Interception ---
+# When frozen, sys.executable points to OmniIDE.exe.
+# /api/run uses sys.executable -c <code> to run scripts.
+# We must intercept -c and run the code directly, otherwise we just spawn another IDE!
+if len(sys.argv) >= 3 and sys.argv[1] == '-c':
+    code_payload = sys.argv[2]
+    try:
+        # Execute in the global namespace like a normal script
+        exec(code_payload, {'__name__': '__main__'})
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error during execution: {e}", file=sys.stderr)
+        sys.exit(1)
+# -------------------------------------------------------
+
 import webview
 import threading
 import uvicorn
@@ -37,6 +55,21 @@ if __name__ == '__main__':
     # Wait for Health Check
     wait_for_server()
 
+    # --- JS API Bridge ---
+    class Api:
+        def __init__(self):
+            self.window = None
+
+        def select_folder(self):
+            # Opens a native OS folder selection dialog
+            if self.window:
+                result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+                if result and len(result) > 0:
+                    return result[0]
+            return None
+
+    api = Api()
+
     # Launch GUI
     # debug=True allows Right-Click -> Inspect Element for debuggingJS
     window = webview.create_window(
@@ -45,6 +78,9 @@ if __name__ == '__main__':
         width=1200,
         height=800,
         resizable=True,
-        confirm_close=True
+        confirm_close=True,
+        js_api=api
     )
+    api.window = window
+    
     webview.start(debug=True)

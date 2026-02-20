@@ -20,7 +20,7 @@ args = [
     '--clean',
     '--hidden-import=uvicorn',
     '--hidden-import=engineio.async_drivers.threading',
-    '--hidden-import=smolagents',
+    '--collect-all=smolagents',
     '--exclude-module=torch',
     '--exclude-module=uvloop',
     '--exclude-module=tkinter',

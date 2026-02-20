@@ -4,9 +4,11 @@
 document.addEventListener('DOMContentLoaded', () => {
     console.log("Omni-IDE Initializing...");
 
+
     // --- State ---
     const openModels = {};
     let activeFile = null;
+    let currentSubpath = ''; // Tracks the current subfolder being browsed
 
     // --- DOM ---
     const fileListEl = document.getElementById('file-list');
@@ -45,14 +47,43 @@ document.addEventListener('DOMContentLoaded', () => {
         const name = item.dataset.name;
         const type = item.dataset.type;
         if (!name) return;
-        if (type === 'file') openFile(name);
+        if (type === 'file') {
+            // Build the full relative path for opening
+            const relativePath = currentSubpath ? currentSubpath + '/' + name : name;
+            openFile(relativePath);
+        } else if (type === 'directory') {
+            // Navigate into the subdirectory
+            currentSubpath = currentSubpath ? currentSubpath + '/' + name : name;
+            loadFileList();
+        }
     });
 
     // --- 3. Folder Navigation ---
     async function changeDirectory() {
-        const rawPath = prompt("Enter full path to open (e.g. C:\\Users\\Name\\Project):");
-        if (!rawPath) return;
-        const cleanPath = rawPath.replace(/^["']|["']$/g, '').trim();
+        let cleanPath = null;
+
+        // Native Desktop App mode: Use Pywebview Python Bridge to open a real OS folder dialog
+        if (window.pywebview && window.pywebview.api) {
+            try {
+                const folderPath = await window.pywebview.api.select_folder();
+                if (folderPath) {
+                    cleanPath = folderPath;
+                } else {
+                    return; // User canceled the native dialog
+                }
+            } catch (err) {
+                console.error("Native dialog failed:", err);
+                // Fallback handled below
+            }
+        }
+
+        // Browser mode / Fallback: Use manual prompt
+        if (!cleanPath) {
+            const rawPath = prompt("Enter full path to open (e.g. C:\\Users\\Name\\Project):");
+            if (!rawPath) return;
+            cleanPath = rawPath.replace(/^["']|["']$/g, '').trim();
+        }
+
         try {
             const response = await fetch('/api/change_dir', {
                 method: 'POST',
@@ -69,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 delete openModels[f];
             });
             activeFile = null;
+            currentSubpath = ''; // Reset subfolder browsing state
             if (window.editor) window.editor.setValue('# Omni-IDE Ready.\n# Select a file or ask the Agent.');
 
             updateTabBar();
@@ -89,6 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 delete openModels[f];
             });
             activeFile = null;
+            currentSubpath = ''; // Reset subfolder browsing state
             if (window.editor) window.editor.setValue('# Omni-IDE Ready.\n# No folder open.');
 
             updateTabBar();
@@ -107,7 +140,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadFileList() {
         fileListEl.innerHTML = '<div class="file-item loading">Loading...</div>';
         try {
-            const response = await fetch('/api/files');
+            const url = currentSubpath
+                ? `/api/files?subpath=${encodeURIComponent(currentSubpath)}`
+                : '/api/files';
+            const response = await fetch(url);
             const data = await response.json();
             if (data.no_directory) {
                 currentPathEl.textContent = '';
@@ -116,10 +152,67 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             if (data.current_dir) {
-                currentPathEl.textContent = data.current_dir;
+                // Show full browsing path with subpath
+                const displayPath = currentSubpath
+                    ? data.current_dir + '/' + currentSubpath
+                    : data.current_dir;
+                currentPathEl.textContent = displayPath;
                 closeDirBtn.style.display = 'block'; // Show close button
             }
             fileListEl.innerHTML = '';
+
+            // --- Breadcrumb Navigation ---
+            if (currentSubpath) {
+                // Build clickable breadcrumb trail
+                const breadcrumbDiv = document.createElement('div');
+                breadcrumbDiv.style.cssText = 'padding:6px 12px;font-size:11px;color:#888;border-bottom:1px solid #333;display:flex;align-items:center;gap:4px;flex-wrap:wrap;';
+
+                // Root link
+                const rootLink = document.createElement('span');
+                rootLink.textContent = '📁 Root';
+                rootLink.style.cssText = 'cursor:pointer;color:#4fc3f7;';
+                rootLink.onclick = () => { currentSubpath = ''; loadFileList(); };
+                breadcrumbDiv.appendChild(rootLink);
+
+                // Build breadcrumb segments
+                const parts = currentSubpath.split('/');
+                parts.forEach((part, i) => {
+                    const sep = document.createElement('span');
+                    sep.textContent = ' › ';
+                    sep.style.color = '#555';
+                    breadcrumbDiv.appendChild(sep);
+
+                    const link = document.createElement('span');
+                    link.textContent = part;
+                    if (i < parts.length - 1) {
+                        // Clickable parent segment
+                        link.style.cssText = 'cursor:pointer;color:#4fc3f7;';
+                        const targetPath = parts.slice(0, i + 1).join('/');
+                        link.onclick = () => { currentSubpath = targetPath; loadFileList(); };
+                    } else {
+                        // Current directory (not clickable)
+                        link.style.cssText = 'color:#ccc;font-weight:bold;';
+                    }
+                    breadcrumbDiv.appendChild(link);
+                });
+
+                fileListEl.appendChild(breadcrumbDiv);
+
+                // Back / Parent button
+                const backDiv = document.createElement('div');
+                backDiv.className = 'file-item directory';
+                backDiv.style.cssText = 'display:flex;align-items:center;cursor:pointer;color:#4fc3f7;font-weight:bold;';
+                backDiv.textContent = '⬆️ ..';
+                backDiv.title = 'Go up one level';
+                backDiv.onclick = () => {
+                    const parts = currentSubpath.split('/');
+                    parts.pop();
+                    currentSubpath = parts.join('/');
+                    loadFileList();
+                };
+                fileListEl.appendChild(backDiv);
+            }
+
             if (data.files && data.files.length > 0) {
                 data.files.forEach(file => {
                     const div = document.createElement('div');
@@ -131,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     div.style.alignItems = 'center';
 
                     const nameSpan = document.createElement('span');
-                    nameSpan.textContent = (file.type === 'directory' ? '\ud83d\udcc1 ' : '\ud83d\udcc4 ') + file.name;
+                    nameSpan.textContent = (file.type === 'directory' ? '📁 ' : '📄 ') + file.name;
                     nameSpan.style.flex = '1';
                     nameSpan.style.overflow = 'hidden';
                     nameSpan.style.textOverflow = 'ellipsis';
@@ -139,20 +232,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     if (file.type === 'file') {
                         const delBtn = document.createElement('span');
-                        delBtn.textContent = '\ud83d\uddd1\ufe0f';
+                        delBtn.textContent = '🗑️';
                         delBtn.className = 'file-delete-btn';
                         delBtn.title = 'Delete ' + file.name;
                         delBtn.style.cssText = 'cursor:pointer;opacity:0.4;font-size:12px;padding:2px 4px;margin-left:4px;';
                         delBtn.onmouseenter = () => { delBtn.style.opacity = '1'; };
                         delBtn.onmouseleave = () => { delBtn.style.opacity = '0.4'; };
-                        delBtn.onclick = (ev) => { ev.stopPropagation(); deleteFile(file.name); };
+                        const fullRelPath = currentSubpath ? currentSubpath + '/' + file.name : file.name;
+                        delBtn.onclick = (ev) => { ev.stopPropagation(); deleteFile(fullRelPath); };
                         div.appendChild(delBtn);
                     }
 
                     fileListEl.appendChild(div);
                 });
             } else {
-                fileListEl.innerHTML = '<div class="file-item">No files found</div>';
+                fileListEl.innerHTML += '<div class="file-item" style="color:#666;font-style:italic;">Empty folder</div>';
             }
         } catch (e) {
             fileListEl.innerHTML = '<div class="file-item error">Connection Failed</div>';
