@@ -26,8 +26,8 @@ args = [
     '--exclude-module=tkinter',
 ]
 
-if os.path.exists('static/favicon.ico'):
-    args.append('--icon=static/favicon.ico')
+if os.path.exists('static/icon.ico'):
+    args.append('--icon=static/icon.ico')
 
 PyInstaller.__main__.run(args)
 
