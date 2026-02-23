@@ -57,8 +57,12 @@ if __name__ == '__main__':
 
     # --- JS API Bridge ---
     class Api:
-        def __init__(self):
+        def __init__(self, initial_folder):
             self.window = None
+            self.initial_folder = initial_folder
+
+        def get_initial_folder(self):
+            return self.initial_folder
 
         def select_folder(self):
             # Opens a native OS folder selection dialog
@@ -68,7 +72,10 @@ if __name__ == '__main__':
                     return result[0]
             return None
 
-    api = Api()
+    from session_manager import session_manager
+    last_folder = session_manager.get_last_folder()
+    
+    api = Api(last_folder)
 
     # Launch GUI — Production Mode (no DevTools)
     window = webview.create_window(

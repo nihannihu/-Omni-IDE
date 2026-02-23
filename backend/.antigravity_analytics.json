@@ -421,6 +421,102 @@
         "execution_path": "Direct Execution",
         "confidence": 0.95
       }
+    },
+    {
+      "type": "route_selected",
+      "timestamp": "2026-02-21T14:09:38.359350+00:00",
+      "payload": {
+        "execution_path": "Direct Execution",
+        "confidence": 0.95
+      }
+    },
+    {
+      "type": "route_selected",
+      "timestamp": "2026-02-21T14:12:58.247328+00:00",
+      "payload": {
+        "execution_path": "Direct Execution",
+        "confidence": 0.85
+      }
+    },
+    {
+      "type": "route_selected",
+      "timestamp": "2026-02-21T14:13:58.149001+00:00",
+      "payload": {
+        "execution_path": "Direct Execution",
+        "confidence": 0.95
+      }
+    },
+    {
+      "type": "route_selected",
+      "timestamp": "2026-02-21T14:21:13.984235+00:00",
+      "payload": {
+        "execution_path": "Direct Execution",
+        "confidence": 0.95
+      }
+    },
+    {
+      "type": "route_selected",
+      "timestamp": "2026-02-21T17:04:04.309134+00:00",
+      "payload": {
+        "execution_path": "Direct Execution",
+        "confidence": 0.95
+      }
+    },
+    {
+      "type": "insight_trigger",
+      "timestamp": "2026-02-21T17:31:00.033837+00:00",
+      "payload": {
+        "insight_count": 168,
+        "scan_duration_ms": 7891
+      }
+    },
+    {
+      "type": "insight_trigger",
+      "timestamp": "2026-02-21T17:31:07.644321+00:00",
+      "payload": {
+        "insight_count": 168,
+        "scan_duration_ms": 1633
+      }
+    },
+    {
+      "type": "insight_trigger",
+      "timestamp": "2026-02-21T17:31:23.243081+00:00",
+      "payload": {
+        "insight_count": 168,
+        "scan_duration_ms": 1713
+      }
+    },
+    {
+      "type": "insight_trigger",
+      "timestamp": "2026-02-21T17:31:34.761347+00:00",
+      "payload": {
+        "insight_count": 168,
+        "scan_duration_ms": 1750
+      }
+    },
+    {
+      "type": "insight_trigger",
+      "timestamp": "2026-02-21T17:32:57.282512+00:00",
+      "payload": {
+        "insight_count": 168,
+        "scan_duration_ms": 2029
+      }
+    },
+    {
+      "type": "insight_trigger",
+      "timestamp": "2026-02-21T17:34:18.318195+00:00",
+      "payload": {
+        "insight_count": 168,
+        "scan_duration_ms": 1694
+      }
+    },
+    {
+      "type": "route_selected",
+      "timestamp": "2026-02-21T19:02:23.510813+00:00",
+      "payload": {
+        "execution_path": "Direct Execution",
+        "confidence": 0.95
+      }
     }
   ],
   "aggregates": {

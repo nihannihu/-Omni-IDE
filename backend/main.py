@@ -5,17 +5,22 @@ from fastapi.responses import FileResponse
 import asyncio
 import logging
 import os
-import sys
+import shutil
+from session_manager import session_manager
 import subprocess
 import aiofiles
 from pathlib import Path
 from pydantic import BaseModel
+import sys
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+from setup import router as setup_router
+app.include_router(setup_router, prefix="/api/setup", tags=["setup"])
 
 # Global State
 WORKING_DIRECTORY = None  # No directory until user selects one
@@ -79,9 +84,10 @@ async def change_directory(request: ChangeDirRequest):
     if not target_path.exists() or not target_path.is_dir():
         raise HTTPException(status_code=400, detail="Invalid directory path.")
     
-    WORKING_DIRECTORY = str(target_path)
-    logger.info(f"Working Directory changed to: {WORKING_DIRECTORY}")
-    return {"status": "success", "path": WORKING_DIRECTORY}
+    WORKING_DIRECTORY = request.path
+    session_manager.save_last_folder(WORKING_DIRECTORY)
+    logger.info(f"Directory changed to: {WORKING_DIRECTORY}")
+    return {"status": "success", "current_dir": WORKING_DIRECTORY}
 
 @app.post("/api/close_folder")
 async def close_folder():
@@ -144,6 +150,77 @@ async def list_files(subpath: str = ""):
     except Exception as e:
         logger.error(f"Error listing files in {WORKING_DIRECTORY}/{subpath}: {e}")
         return {"files": [], "error": str(e)}
+
+@app.get("/api/browse")
+async def browse_system(path: str = ""):
+    """List subdirectories in a given path for the server-side folder picker."""
+    import string
+    
+    # 1. Handle "Quick Access" / Root for fresh navigation
+    if not path or path == "undefined" or path == "null":
+        drives = []
+        if os.name == 'nt':
+            # Fast check for Windows drives
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    drives.append({"name": drive, "path": drive, "type": "drive"})
+        
+        home = str(Path.home())
+        quick_access = [
+            {"name": "🏠 Home", "path": home, "type": "quick"},
+            {"name": "🖥️ Desktop", "path": str(Path.home() / "Desktop"), "type": "quick"},
+            {"name": "📂 Documents", "path": str(Path.home() / "Documents"), "type": "quick"}
+        ]
+        
+        # Filter quick access for existence
+        quick_access = [q for q in quick_access if os.path.exists(q["path"])]
+        
+        return {
+            "folders": drives + quick_access,
+            "current_path": "",
+            "is_root": True
+        }
+
+    try:
+        target_path = Path(path).resolve()
+        
+        if not target_path.exists() or not target_path.is_dir():
+             # If path doesn't exist, try parent
+             target_path = Path.home()
+        
+        folders = []
+        
+        # Add ".." for navigating up, unless at drive root
+        parent = target_path.parent
+        if parent != target_path:
+            folders.append({"name": ".. (Back)", "path": str(parent), "type": "nav"})
+
+        # IGNORED_DIRS = {'.git', 'node_modules', '__pycache__', 'venv', '.next'}
+        
+        with os.scandir(target_path) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir() and not entry.name.startswith('.'):
+                        folders.append({
+                            "name": entry.name,
+                            "path": str(Path(entry.path)),
+                            "type": "folder"
+                        })
+                except (PermissionError, OSError):
+                    continue
+        
+        # Sort folders alphabetically
+        folders.sort(key=lambda x: (x['type'] != 'folder', x['name'].lower()))
+        
+        return {
+            "folders": folders,
+            "current_path": str(target_path),
+            "is_root": False
+        }
+    except Exception as e:
+        logger.error(f"Browse Error for {path}: {e}")
+        return {"folders": [], "error": str(e), "current_path": path}
 
 @app.get("/api/read")
 async def read_file(filename: str):
@@ -333,79 +410,6 @@ def get_missing_packages(modules: set) -> list:
             missing.append((mod, pip_name))
     return missing
 
-@app.post("/api/run")
-async def run_code(request: CodeRequest):
-    """Run Python code with auto-dependency installation."""
-    global WORKING_DIRECTORY
-    code = request.code
-    
-    try:
-        # Step 1: Extract imports and find missing packages
-        imports = extract_imports(code)
-        missing = get_missing_packages(imports)
-        
-        install_log = ""
-        if missing:
-            pip_names = [pip_name for _, pip_name in missing]
-            logger.info(f"[AUTO-PIP] Installing missing packages: {pip_names}")
-            
-            pip_result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--quiet"] + pip_names,
-                capture_output=True, text=True, timeout=120,
-                cwd=WORKING_DIRECTORY or os.path.dirname(os.path.abspath(__file__))
-            )
-            
-            if pip_result.returncode == 0:
-                install_log = f"📦 Auto-installed: {', '.join(pip_names)}\n\n"
-            else:
-                install_log = f"⚠️ pip install failed for {pip_names}:\n{pip_result.stderr}\n\n"
-        
-        # Step 2: Write code to a temp file and run it
-        import tempfile
-        cwd = WORKING_DIRECTORY or os.path.dirname(os.path.abspath(__file__))
-        
-        # Write to a temp file in the working directory so relative paths work
-        tmp_path = os.path.join(cwd, "__omni_run_temp__.py")
-        with open(tmp_path, 'w', encoding='utf-8') as f:
-            f.write(code)
-        
-        try:
-            # Use a longer timeout for GUI apps
-            is_gui = any(mod in imports for mod in {"pygame", "tkinter", "Tkinter", "PyQt5", "PyQt6", "wx", "kivy"})
-            timeout = 300 if is_gui else 30
-            
-            result = subprocess.run(
-                [sys.executable, tmp_path],
-                capture_output=True, text=True, timeout=timeout,
-                cwd=cwd
-            )
-            
-            return {
-                "stdout": install_log + (result.stdout or ""),
-                "stderr": result.stderr or "",
-                "returncode": result.returncode
-            }
-        finally:
-            # Clean up temp file
-            try:
-                os.remove(tmp_path)
-            except:
-                pass
-    
-    except subprocess.TimeoutExpired:
-        return {
-            "stdout": install_log + "⏱️ Script finished (GUI window was closed or timeout reached).",
-            "stderr": "",
-            "returncode": 0
-        }
-    except Exception as e:
-        logger.error(f"Run Error: {e}")
-        return {
-            "stdout": "",
-            "stderr": str(e),
-            "returncode": 1
-        }
-
 # --- PHASE 5: STAGING LAYER APIs ---
 @app.get("/api/staging/active-sessions")
 async def get_active_sessions():
@@ -487,6 +491,7 @@ async def run_code(request: CodeRequest):
         # So we fall back to the host system's 'python' command.
         
         env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'utf-8'
         python_cmd = sys.executable
         hunter_log = []
         
@@ -621,7 +626,8 @@ builtins.open = _secure_open
             venv_cmd + ["-c", secure_code],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding='utf-8',
+            errors='replace',
             cwd=WORKING_DIRECTORY,
             env=env
         )
@@ -646,7 +652,7 @@ builtins.open = _secure_open
             elif proc.returncode != 0:
                 # Add diagnostics for other failures
                 diag_code = "import sys,os; print(f'\\n--- DIAGNOSTICS ---\\nExecutable: {sys.executable}\\nSysPath: {sys.path}\\nEnviron: PYTHONPATH={os.environ.get(\\'PYTHONPATH\\', \\'None\\')}')"
-                diag_proc = subprocess.run(base_cmd + ["-c", diag_code], capture_output=True, text=True, env=env)
+                diag_proc = subprocess.run(base_cmd + ["-c", diag_code], capture_output=True, encoding='utf-8', errors='replace', env=env)
                 stderr += diag_proc.stdout
                 stderr += "\n💡 [AI CO-FOUNDER] Your code crashed. Type '/debug' in the chat to automatically analyze and fix this error.\n"
             # -----------------------------------
@@ -805,7 +811,12 @@ async def run_template(request: TemplateRunRequest, background_tasks: Background
                     wrapped = {"__dag_event__": True, **event}
                     asyncio.run_coroutine_threadsafe(manager.broadcast_json(wrapped), loop)
                 elif event.get("__copilot_event__"):
-                    payload = {k: v for k, v in event.items() if k != "__copilot_event__"}
+                    payload = {
+                        "type": "copilot_event",
+                        "source": event.get("source", "router"),
+                        "event_type": event.get("type", "unknown"),
+                        "payload": event.get("payload", {})
+                    }
                     asyncio.run_coroutine_threadsafe(manager.broadcast_json(payload), loop)
 
         try:
@@ -909,7 +920,12 @@ async def websocket_endpoint(websocket: WebSocket):
                             payload = {k: v for k, v in token.items() if k != "__dag_event__"}
                             await manager.send_json(payload, websocket)
                         elif token.get("__copilot_event__"):
-                            payload = {k: v for k, v in token.items() if k != "__copilot_event__"}
+                            payload = {
+                                "type": "copilot_event",
+                                "source": token.get("source", "router"),
+                                "event_type": token.get("type", "unknown"),
+                                "payload": token.get("payload", {})
+                            }
                             await manager.send_json(payload, websocket)
                         else:
                             await manager.send_json({"type": "agent_token", "text": str(token)}, websocket)

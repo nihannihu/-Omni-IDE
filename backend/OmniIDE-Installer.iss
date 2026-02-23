@@ -4,7 +4,7 @@
 ; ══════════════════════════════════════════════════════════
 
 #define MyAppName "Omni-IDE"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "2.0.0"
 #define MyAppPublisher "Mohammed Nihan"
 #define MyAppURL "https://github.com/nihannihu/-Omni-IDE"
 #define MyAppExeName "OmniIDE.exe"
@@ -22,7 +22,7 @@ AppSupportURL={#MyAppURL}/issues
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-LicenseFile=..\LICENSE.txt
+LicenseFile=docs\LICENSE.txt
 OutputDir=..\installer
 OutputBaseFilename=OmniIDE-Setup-v{#MyAppVersion}
 SetupIconFile=static\icon.ico
@@ -40,8 +40,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-; Bundle the entire dist/OmniIDE folder
-Source: "dist\OmniIDE\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Bundle the entire prepared directory
+Source: "*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "OmniIDE-Installer.iss"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

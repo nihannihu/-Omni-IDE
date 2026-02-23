@@ -1,23 +1,27 @@
+# ══════════════════════════════════════════════════════════════════
+# 🧠 Omni-IDE — Intent Router (v2.0 — NO HuggingFace)
+# ══════════════════════════════════════════════════════════════════
+# Uses Gemini via LiteLLM for LLM-powered intent classification.
+# Falls back to keyword heuristics if LLM is unavailable.
+# ══════════════════════════════════════════════════════════════════
+
 import os
 import json
 import logging
-from typing import Dict, Any, List
-from huggingface_hub import InferenceClient
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
 from analytics_engine import analytics_engine
 
+
 class IntentRouter:
     def __init__(self, confidence_threshold: float = 0.8):
         self.confidence_threshold = confidence_threshold
-        hf_token = os.getenv("HUGGINGFACE_API_KEY")
-        if not hf_token:
-            logger.warning("HUGGINGFACE_API_KEY missing! Router may fail.")
-            
-        self.client = InferenceClient(token=hf_token)
-        # Using a model that is likely within free usage tier or has remaining credits
-        self.model_id = "Qwen/Qwen2.5-Coder-32B-Instruct"
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        
+        if not self.gemini_key:
+            logger.warning("GEMINI_API_KEY missing! Router will use heuristics only.")
 
     def _build_prompt(self, query: str) -> list:
         system_prompt = """You are the Omni-IDE Intent Router. 
@@ -39,47 +43,34 @@ SCHEMA:
     def route_intent(self, query: str) -> Dict[str, Any]:
         """
         Routes the user's query through the Intelligence Layer.
-        Evaluates Confidence Thresholds and Complexity Heuristics.
+        Uses Gemini via LiteLLM, falls back to heuristics.
         """
+        # If no Gemini key, skip LLM and go straight to heuristics
+        if not self.gemini_key:
+            return self._heuristic_fallback(query)
+        
         messages = self._build_prompt(query)
         
         try:
-            response = self.client.chat_completion(
-                model=self.model_id,
+            import litellm
+            response = litellm.completion(
+                model="gemini/gemini-1.5-pro-latest",
+                api_key=self.gemini_key,
                 messages=messages,
-                max_tokens=300
+                max_tokens=300,
             )
             raw_response = response.choices[0].message.content
             
-            # Fallback parsing if LLM didn't respect JSON mode natively
+            # Parse JSON (with fallback cleanup)
             try:
                 parsed_data = json.loads(raw_response)
             except json.JSONDecodeError:
-                # Naive cleanup
                 clean = raw_response.replace("```json", "").replace("```", "").strip()
                 parsed_data = json.loads(clean)
 
         except Exception as e:
             logger.error(f"Routing failed due to LLM error: {e}. Falling back to heuristics.")
-            # HEURISTIC FALLBACK (Production Resilience)
-            query_lower = query.lower()
-            complex_keywords = ["create", "build", "implement", "scaffold", "make", "setup", "complete"]
-            complexity_signals = ["game", "app", "dashboard", "page", "system", "feature", "module"]
-            
-            is_complex = any(k in query_lower for k in complex_keywords) and \
-                         any(s in query_lower for s in complexity_signals)
-            
-            if is_complex:
-                return {
-                    "execution_path": "Task Graph Planner",
-                    "reason": "Heuristic: Complex keywords detected in LLM fallback mode.",
-                    "raw_data": {"confidence_score": 0.9}
-                }
-            return {
-                "execution_path": "Direct Execution",
-                "reason": "Heuristic: Simple query detected in LLM fallback mode.",
-                "raw_data": {"confidence_score": 0.9}
-            }
+            return self._heuristic_fallback(query)
 
         score = float(parsed_data.get("confidence_score", 0.0))
         extracted_tools = parsed_data.get("extracted_tools", [])
@@ -114,3 +105,26 @@ SCHEMA:
         })
 
         return result
+
+    def _heuristic_fallback(self, query: str) -> Dict[str, Any]:
+        """Pure keyword-based routing when LLM is unavailable."""
+        query_lower = query.lower()
+        complex_keywords = ["create", "build", "implement", "scaffold", "make", "setup", "complete"]
+        complexity_signals = ["game", "app", "dashboard", "page", "system", "feature", "module"]
+        
+        is_complex = any(k in query_lower for k in complex_keywords) and \
+                     any(s in query_lower for s in complexity_signals)
+        
+        if is_complex:
+            return {
+                "execution_path": "Task Graph Planner",
+                "reason": "Heuristic: Complex keywords detected (LLM unavailable).",
+                "confidence": 0.9,
+                "raw_data": {"confidence_score": 0.9}
+            }
+        return {
+            "execution_path": "Direct Execution",
+            "reason": "Heuristic: Simple query detected (LLM unavailable).",
+            "confidence": 0.9,
+            "raw_data": {"confidence_score": 0.9}
+        }

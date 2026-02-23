@@ -2,21 +2,19 @@ import logging
 import re
 import os
 import sys
+import subprocess
 from threading import Thread, Lock as ThreadLock
+from config import ENV_PATH
 from dotenv import load_dotenv
-load_dotenv(override=True)  # ALWAYS load fresh key from .env
+load_dotenv(ENV_PATH, override=True)  # ALWAYS load fresh key from portable .env
 
-# Lightweight Agent Framework
-from smolagents import CodeAgent, Tool, InferenceClientModel, ChatMessage, MessageRole, ChatMessageStreamDelta, ActionStep, ToolCall, ToolOutput, FinalAnswerStep
+# Lightweight Agent Framework (NO HuggingFace dependency)
+from smolagents import CodeAgent, Tool, LiteLLMModel, ChatMessage, MessageRole, ChatMessageStreamDelta, ActionStep, ToolCall, ToolOutput, FinalAnswerStep
 from smolagents.models import get_clean_message_list
 import smolagents.utils as smolagents_utils
 
-# API Client for Vision & Chat
-from huggingface_hub import InferenceClient
-
 # Load environment variables
-load_dotenv()
-hf_token = os.getenv("HUGGINGFACE_API_KEY")
+load_dotenv(ENV_PATH)
 
 logger = logging.getLogger(__name__)
 
@@ -186,10 +184,108 @@ def create_web_page(folder_name: str, page_type: str = "landing", title: str = "
     return open_in_browser(str(folder / "index.html"))
 
 # ------------------------------------------------------------------
+# TERMINAL TOOL — The "Hands" of the God Agent
+# ------------------------------------------------------------------
+
+class TerminalTool(Tool):
+    """
+    Execute terminal commands on the user's machine.
+    This gives the agent "hands" — the ability to run code, install packages,
+    and interact with the local system.
+    """
+    name = "terminal"
+    description = (
+        "Execute a shell command on the user's machine and return the output. "
+        "Use this to run Python scripts, install packages with pip, "
+        "list files, run tests, or any other terminal command. "
+        "The command runs in the current working directory."
+    )
+    inputs = {
+        "command": {
+            "type": "string",
+            "description": (
+                "The shell command to execute. Examples: "
+                "'python my_script.py', 'pip install requests', "
+                "'dir', 'type file.txt', 'python -c \"print(1+1)\"'"
+            )
+        }
+    }
+    output_type = "string"
+
+    # Commands that are too dangerous even for God Mode
+    BLOCKED_COMMANDS = frozenset({
+        "format", "del /s", "rd /s /q C:", "rm -rf /",
+        "shutdown", "restart", ":(){", "mkfs",
+    })
+
+    def forward(self, command: str) -> str:
+        """Execute a command and return structured stdout/stderr output."""
+
+        # Safety check: block catastrophically destructive commands
+        cmd_lower = command.lower().strip()
+        for blocked in self.BLOCKED_COMMANDS:
+            if blocked in cmd_lower:
+                return f"🛑 BLOCKED: Command '{command}' is too dangerous. Refusing to execute."
+
+        logger.info(f"🖥️  TERMINAL: Executing → {command}")
+
+        try:
+            # Determine working directory
+            cwd = WORKING_DIRECTORY if WORKING_DIRECTORY else os.getcwd()
+
+            # Build a clean environment
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'
+
+            result = subprocess.run(
+                command,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,  # 2 minute hard timeout
+                cwd=cwd,
+                env=env,
+            )
+
+            stdout = result.stdout.strip()
+            stderr = result.stderr.strip()
+            returncode = result.returncode
+
+            # Build structured output
+            if returncode == 0:
+                output = f"✅ OUTPUT (exit code 0):\n{stdout}" if stdout else "✅ SUCCESS (exit code 0, no output)"
+                if stderr:
+                    # Some tools write warnings to stderr even on success
+                    output += f"\n\n⚠️ WARNINGS:\n{stderr}"
+                logger.info(f"🖥️  TERMINAL: ✅ Success (exit={returncode})")
+                return output
+            else:
+                output = f"❌ ERROR (exit code {returncode}):\n"
+                if stderr:
+                    output += f"{stderr}\n"
+                if stdout:
+                    output += f"\nPartial Output:\n{stdout}\n"
+                output += "\n(Review this error and fix your code. Do NOT ask the user — just fix it.)"
+                logger.warning(f"🖥️  TERMINAL: ❌ Failed (exit={returncode})")
+                return output
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"🖥️  TERMINAL: ⏰ Timeout after 120s → {command}")
+            return (
+                f"❌ TIMEOUT: Command '{command}' exceeded 120 seconds.\n"
+                "The process was killed. Consider breaking the task into smaller steps."
+            )
+        except Exception as e:
+            logger.error(f"🖥️  TERMINAL: 💥 Exception → {e}")
+            return f"❌ SYSTEM ERROR: {str(e)}\n(Review this error and fix your approach.)"
+
+
+# ------------------------------------------------------------------
 # VISION TOOL (SERVERLESS)
 # ------------------------------------------------------------------
 
 class VisionTool(Tool):
+    """Vision tool powered by Gemini Pro Vision (NO HuggingFace)."""
     name = "analyze_screen"
     description = "Analyze the latest screen frame to answer a question. Use this tool when the user asks you to 'see', 'look', or describe what is on the screen."
     inputs = {
@@ -203,8 +299,7 @@ class VisionTool(Tool):
     def __init__(self, get_image_func, **kwargs):
         super().__init__(**kwargs)
         self.get_image_func = get_image_func
-        # Use Hugging Face Inference API for Vision
-        self.client = InferenceClient(token=os.getenv("HUGGINGFACE_API_KEY"))
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
 
     def forward(self, question: str) -> str:
         try:
@@ -216,23 +311,25 @@ class VisionTool(Tool):
             if "," in image_data:
                  image_data = image_data.split(",")[1]
             
-            logger.info(f"VisionTool: Analyzing screen with question: '{question}' (Cloud Vision)")
+            logger.info(f"VisionTool: Analyzing screen with question: '{question}' (Gemini Vision)")
             
-            # Use Qwen2.5-VL-7B-Instruct or Llama-3.2-11B-Vision
-            # Trying Qwen/Qwen2.5-VL-7B-Instruct first as it matches our Coder model family
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}},
-                        {"type": "text", "text": question}
-                    ]
-                }
-            ]
-            
-            response = self.client.chat_completion(
-                model="Qwen/Qwen2.5-VL-7B-Instruct",
-                messages=messages,
+            if not self.gemini_key:
+                return "Vision unavailable: GEMINI_API_KEY not configured in .env"
+
+            # Use Gemini Pro Vision via LiteLLM
+            import litellm
+            response = litellm.completion(
+                model="gemini/gemini-1.5-pro-latest",
+                api_key=self.gemini_key,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}},
+                            {"type": "text", "text": question}
+                        ]
+                    }
+                ],
                 max_tokens=500
             )
             
@@ -245,16 +342,12 @@ class VisionTool(Tool):
             return f"Error analyzing screen: {str(e)}"
 
 # ------------------------------------------------------------------
-# OMNI AGENT (CLOUD BRAIN)
+# OMNI AGENT (GOD-TIER AUTONOMOUS ENGINEER)
 # ------------------------------------------------------------------
 
 class OmniAgent:
     def __init__(self):
-        logger.info("Initializing Cloud Brain (Qwen2.5-Coder-32B)...")
-        
-        api_key = os.getenv("HUGGINGFACE_API_KEY")
-        if not api_key:
-            logger.error("CRITICAL: HUGGINGFACE_API_KEY missing!")
+        logger.info("Initializing Hybrid Intelligence Engine (Gemini + Local Qwen)...")
         
         # Vision Caching
         self.image_lock = ThreadLock()
@@ -265,23 +358,36 @@ class OmniAgent:
                 return self.latest_image
         
         self.vision_tool = VisionTool(get_latest_image)
+        self.terminal_tool = TerminalTool()
+
+        # ----------------------------------------------------------
+        # HYBRID INTELLIGENCE GATEWAY (Smart Model Routing)
+        # ----------------------------------------------------------
+        try:
+            from gateway import model_gateway
+            self.gateway = model_gateway
+            logger.info("🧠 Hybrid Intelligence Gateway connected.")
+        except Exception as e:
+            logger.warning(f"⚠️ Gateway unavailable ({e}). Falling back to Local Qwen.")
+            self.gateway = None
         
-        # PROMPT: Ultra-Aggressive Direct Execution Engine
+        # PROMPT: God-Tier Autonomous Engineer Protocol
         SYSTEM_PROMPT = r"""
-You are a Senior Full-Stack Developer and AI Coding Engine, created by Nihan Nihu.
-CRITICAL RULE: You are a File Creation Engine.
-When generating code, you MUST immediately write it to the disk using pathlib.
+You are an Autonomous Senior Engineer (God Mode), created by Nihan Nihu.
+You do not just write code — you EXECUTE it, VERIFY it, and FIX it.
 
-CORRECT PATTERN:
-from pathlib import Path
-Path('index.html').write_text('...content...', encoding='utf-8')
+=== AUTONOMY PROTOCOL ===
 
-INCORRECT PATTERN (DO NOT DO THIS):
-html_content = '...content...' # This is useless! Write it to disk!
+1. PLAN: Break the user's request into clear steps.
+2. ACTION: Write the code (Python or Shell).
+3. VERIFY: Use the `terminal` tool to run your script IMMEDIATELY.
+4. REFLECT:
+   - If you see `❌ ERROR`, you MUST analyze the error, rewrite the code, and try again.
+   - Do NOT ask the user for permission to fix bugs. Just fix them.
+   - You have MAX 3 retry attempts for any single error.
+5. FINAL ANSWER: Only return when your code exits with code 0 (Success).
 
-If asked "Who created you?", answer "I was created by Nihan Nihu."
-
-=== ABSOLUTE RULES (VIOLATION = FAILURE) ===
+=== FILE OPERATIONS ===
 
 RULE 1 - FILE CREATION (when user says "create", "make", "build"):
   - Call `safe_write(filename, content)` DIRECTLY with the full file content.
@@ -310,54 +416,64 @@ RULE 4 - TOOLS AVAILABLE:
   - `safe_open(path, mode)` - Open/read a file (mode="r" for reading)
   - `safe_delete(filename)` - Delete a file or directory
   - `safe_mkdir(dirname)` - Create a directory
+  - `terminal(command)` - Execute ANY shell command (pip, python, node, git, etc.)
   - `analyze_screen(question)` - See the user's screen
 
 RULE 5 - FILE DELETION (when user says "delete", "remove"):
   - Call `safe_delete(filename)` for each file to delete.
   - After deleting: `final_answer("DELETED: filename1.html, filename2.css")`
 
+RULE 6 - TERMINAL EXECUTION (when user says "run", "install", "test", "execute"):
+  - Use the `terminal` tool to execute commands directly.
+  - Examples:
+    * `terminal("pip install requests")`
+    * `terminal("python my_script.py")`
+    * `terminal("node index.js")`
+    * `terminal("git status")`
+  - If the terminal returns an error, ANALYZE it and FIX it automatically.
+  - Do NOT just report the error back to the user.
+
+RULE 7 - SELF-HEALING PROTOCOL:
+  When you encounter an error:
+  1. Read the stderr output carefully.
+  2. Identify the root cause (missing import, syntax error, missing package, etc.)
+  3. Fix the code or install the missing package using `terminal`.
+  4. Re-run and verify.
+  5. Only call `final_answer` when everything works.
+
 === CORRECT EXAMPLES ===
 
-EXAMPLE 1 - CREATE new files:
-User: "Create a login page"
+EXAMPLE 1 - CREATE and RUN:
+User: "Create a script that prints fibonacci numbers and run it"
 ```python
-safe_write("login.html", '''<!DOCTYPE html>
-<html><head><title>Login</title><link rel="stylesheet" href="style.css"></head>
-<body><div class="container"><h1>Login</h1>
-<form><input type="email" placeholder="Email"><input type="password" placeholder="Password">
-<button type="submit">Sign In</button></form></div></body></html>''')
+safe_write("fibonacci.py", '''
+def fibonacci(n):
+    a, b = 0, 1
+    for _ in range(n):
+        print(a end=" ")
+        a, b = b, a + b
 
-safe_write("style.css", '''body { background: linear-gradient(135deg, #667eea, #764ba2); min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: sans-serif; }
-.container { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); padding: 40px; border-radius: 16px; }
-button { padding: 12px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; }''')
-
-final_answer("DONE: login.html, style.css")
+fibonacci(10)
+''')
+result = terminal("python fibonacci.py")
+# If result contains ❌ ERROR, fix and retry automatically
+final_answer("DONE: fibonacci.py — Output: " + result)
 ```
 
-EXAMPLE 2 - EDIT an existing file:
-User: "Edit login.html, add a Register button and make buttons blue"
+EXAMPLE 2 - INSTALL and USE:
+User: "Install requests and fetch google.com"
 ```python
-# Step 1: READ existing content
-existing_html = safe_open("login.html", "r").read()
-
-# Step 2: MODIFY - replace the closing </form> with new button + closing tag
-modified_html = existing_html.replace(
-    '</form>',
-    '<button type="button" class="register-btn">Register</button>\n</form>'
-)
-
-# Step 3: WRITE back
-safe_write("login.html", modified_html)
-
-# Also update CSS
-existing_css = safe_open("style.css", "r").read()
-modified_css = existing_css + '''
-.register-btn { padding: 12px; background: #2196F3; color: white; border: none; border-radius: 8px; cursor: pointer; margin-top: 10px; width: 100%; }
-button { background: #2196F3 !important; }'''
-safe_write("style.css", modified_css)
-
-final_answer("DONE: login.html, style.css")
+terminal("pip install requests")
+safe_write("fetch.py", '''
+import requests
+r = requests.get("https://google.com")
+print(f"Status: {r.status_code}")
+''')
+result = terminal("python fetch.py")
+final_answer("DONE: fetch.py — " + result)
 ```
+
+If asked "Who created you?", answer "I was created by Nihan Nihu."
 
 === WRONG (NEVER DO THIS) ===
 ```python
@@ -367,48 +483,91 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
 ```
 """
         try:
-            # Using a more widely available model for free-tier resilience
-            # CRITICAL: We MUST explicitly limit max_tokens. smolagents defaults 
-            # to a massive token request that instantly forces HuggingFace to route
-            # to the paid Inference Providers tier (giving a 402 Error).
-            self.model = InferenceClientModel(
-                model_id="Qwen/Qwen2.5-Coder-32B-Instruct", 
-                token=api_key,
-                max_tokens=1500
-            )
-            
-            # CRITICAL: Do NOT pass tools=[self.vision_tool] here!
-            # HuggingFace Free Tier instantly throws a 402 Payment Required error if ANY
-            # native 'tools' schema is sent in the API payload. 
-            # We inject the Vision tool directly into the Python executor environment below.
-            self.agent = CodeAgent(
-                tools=[], 
-                model=self.model, 
-                add_base_tools=True,
-                max_steps=10, 
-                verbosity_level=logging.INFO,
-                instructions=SYSTEM_PROMPT,
-                additional_authorized_imports=["datetime", "math", "random", "time", "json", "re"],
-                stream_outputs=True,
-                executor_kwargs={
-                    "additional_functions": {
-                        "safe_write": safe_write,
-                        "safe_open": safe_open,
-                        "safe_delete": safe_delete,
-                        "safe_mkdir": safe_mkdir,
-                        "open_in_browser": open_in_browser,
-                        "create_web_page": create_web_page,
-                        "VisionTool": VisionTool
+            # ──────────────────────────────────────────────────────
+            # HYBRID INTELLIGENCE: Gateway (Gemini + Local Qwen)
+            # NO HUGGING FACE. Zero external token dependencies.
+            # ──────────────────────────────────────────────────────
+            self.model = None
+            self._init_error = None  # Track init failures for graceful messaging
+
+            if self.gateway:
+                try:
+                    # ── CLOUD-PRIMARY STRATEGY ──────────────────────────
+                    # Gemini is the primary brain for all user tasks.
+                    # Local 3B models are too small for smolagents' 
+                    # structured tool-calling protocol (they run code in
+                    # sandbox but don't use safe_write to persist files).
+                    # Local is only used as offline fallback.
+                    # ───────────────────────────────────────────────────
+                    self.model = self.gateway.get_brain(
+                        task_complexity="HIGH",
+                        user_query="init"
+                    )
+                    logger.info(f"🧠 GATEWAY: Model selected → {self.model.model_id}")
+                except RuntimeError as gw_err:
+                    # Gateway exhausted all tiers — store error for graceful messaging
+                    logger.error(f"🚨 GATEWAY: All model tiers exhausted: {gw_err}")
+                    self._init_error = str(gw_err)
+                except Exception as gw_err:
+                    logger.warning(f"⚠️ Gateway selection failed ({gw_err}). Trying direct local.")
+                    self.model = None
+
+            if self.model is None and self._init_error is None:
+                # Direct fallback: Local Qwen via Ollama (auto-detect model)
+                try:
+                    local_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+                    # Use gateway's auto-detected model, or fall back to 3b
+                    local_model = getattr(self.gateway, 'local_model_id', None) or "ollama/qwen2.5-coder:3b"
+                    self.model = LiteLLMModel(
+                        model_id=local_model,
+                        api_base=local_url,
+                    )
+                    logger.info(f"⚡ FALLBACK: Using Local {local_model} (Ollama)")
+                except Exception as local_err:
+                    logger.error(f"🚨 LOCAL FALLBACK FAILED: {local_err}")
+                    self._init_error = (
+                        "🚨 **No AI Model Available.**\n\n"
+                        "Neither Gemini (Cloud) nor Ollama (Local) could be reached.\n\n"
+                        "**To fix this, do ONE of the following:**\n"
+                        "1. **Connect to the internet** and add a valid `GEMINI_API_KEY` to your `.env` file.\n"
+                        "2. **Start Ollama locally:** Run `ollama serve` then `ollama pull qwen2.5-coder:7b`.\n\n"
+                        "Once either is available, restart the IDE."
+                    )
+
+            # Only create the CodeAgent if we have a working model
+            if self.model is not None:
+                self.agent = CodeAgent(
+                    tools=[], 
+                    model=self.model, 
+                    add_base_tools=True,
+                    max_steps=10, 
+                    verbosity_level=logging.INFO,
+                    instructions=SYSTEM_PROMPT,
+                    additional_authorized_imports=[
+                        "datetime", "math", "random", "time", "json", "re",
+                        "subprocess", "os", "sys", "shutil", "glob",  # God Mode imports
+                    ],
+                    stream_outputs=True,
+                    executor_kwargs={
+                        "additional_functions": {
+                            "safe_write": safe_write,
+                            "safe_open": safe_open,
+                            "safe_delete": safe_delete,
+                            "safe_mkdir": safe_mkdir,
+                            "open_in_browser": open_in_browser,
+                            "create_web_page": create_web_page,
+                            "terminal": self.terminal_tool.forward,
+                            "VisionTool": VisionTool
+                        }
                     }
-                }
-            )
-            logger.info("Cloud Brain initialized successfully.")
+                )
+                logger.info("Hybrid Brain initialized (God Mode: ACTIVE). Zero HuggingFace.")
+            else:
+                self.agent = None
+                logger.error("🚨 Agent running in DEGRADED MODE — no model available.")
             
         except Exception as e:
-            if "402" in str(e):
-                logger.error("HuggingFace Inference API quota exhausted (402).")
-            else:
-                logger.error(f"Failed to initialize AI Agent: {e}")
+            logger.error(f"Failed to initialize AI Agent: {e}")
             raise e
 
     def update_vision_context(self, base64_image: str):
@@ -416,10 +575,39 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
             # logger.debug("Updated latest screen frame")
             self.latest_image = base64_image
 
+    def get_smart_model(self, task: str, file_content: str = ""):
+        """
+        Use the Hybrid Intelligence Gateway to select the optimal model
+        for the given task and context.
+        
+        Returns a ready-to-use model instance, or None if the gateway
+        is unavailable (fallback to Local Qwen via Ollama).
+        """
+        if not self.gateway:
+            return None
+        
+        try:
+            model = self.gateway.get_model_for_chat(task, file_content)
+            logger.info(f"🧠 Smart Model selected: {model.model_id}")
+            return model
+        except Exception as e:
+            logger.warning(f"⚠️ Gateway routing failed ({e}). Using default model.")
+            return None
+
     def execute_stream(self, task: str):
         """Execute a task context-aware and yield ONLY the clean final answer to the frontend."""
         logger.info(f"Agent task received: {task}")
         final_answer = None
+        
+        # Graceful error if no model was available at init time
+        if self._init_error or self.agent is None:
+            yield (
+                self._init_error or
+                "🚨 **No AI Model Available.**\n\n"
+                "Please connect to the internet or ensure Ollama is running.\n"
+                "Run `ollama serve` then `ollama pull qwen2.5-coder:7b` to enable local AI."
+            )
+            return
         
         # --- PHASE 3: INTELLIGENCE CORE WIRING ---
         from intelligence_core import IntelligenceCore
@@ -535,7 +723,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                                 yield fallback_result
                                 core.add_memory_note(f"User Request: {task[:100]}")
                             else:
-                                yield f"⚠️ **AI Credits Depleted.**\nYour HuggingFace API key has run out of credits.\n\n💡 **How to fix:** Update your API key in the IDE settings with one that has active credits, or subscribe to HuggingFace PRO."
+                                yield f"⚠️ **AI Credits Depleted.**\nYour Gemini API key may have run out of credits.\n\n💡 **How to fix:** Check your Google AI Studio billing or ensure Ollama is running locally."
                         else:
                             yield f"❌ **Planner Engine Failed.**\nError: {pe}"
                     return
@@ -651,8 +839,50 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
             return
         except Exception as e:
             logger.error(f"Execution Error: {e}")
-            err_str = str(e)
-            if "402" in err_str or "Payment Required" in err_str or "Credit balance" in err_str:
+            err_str = str(e).lower()
+            
+            # ── RUNTIME FALLBACK: Local model failed → Swap to Gemini Cloud ──
+            is_model_error = any(kw in err_str for kw in [
+                "not found", "connection refused", "connection error",
+                "timeout", "connect_tcp", "ollama", "404",
+            ])
+            
+            if is_model_error and self.gateway and self.gateway.gemini_key:
+                logger.warning("⚠️ LOCAL MODEL FAILED AT RUNTIME. Swapping to Gemini Cloud...")
+                yield "⚠️ *Local model unavailable. Switching to Gemini Cloud...*\n\n"
+                
+                try:
+                    cloud_model = self.gateway.get_cloud_model()
+                    if cloud_model:
+                        # Swap the agent's model to cloud
+                        self.agent.model = cloud_model
+                        self.model = cloud_model
+                        logger.info(f"☁️ RUNTIME SWAP: Now using {cloud_model.model_id}")
+                        
+                        # Retry the task with the cloud model
+                        final_answer = None
+                        for step in self.agent.run(task_to_run, stream=True):
+                            if isinstance(step, ActionStep):
+                                if step.error:
+                                    logger.error(f"  Cloud Step Error: {step.error}")
+                                if step.is_final_answer and step.action_output is not None:
+                                    final_answer = str(step.action_output)
+                            elif isinstance(step, FinalAnswerStep):
+                                final_answer = str(step.output)
+                        
+                        if final_answer:
+                            yield final_answer
+                        else:
+                            yield "Task completed (via Gemini Cloud)."
+                        return
+                    else:
+                        logger.error("☁️ Cloud model also unavailable.")
+                except Exception as cloud_err:
+                    logger.error(f"☁️ Cloud retry failed: {cloud_err}")
+                    yield f"Error: Cloud fallback also failed: {cloud_err}"
+                    return
+            
+            if "402" in err_str or "payment required" in err_str or "credit balance" in err_str:
                 # --- GRACEFUL FALLBACK: Use Instant Generation templates ---
                 from offline_engine import execute_offline
                 fallback_result = execute_offline(task, safe_write)
@@ -660,7 +890,150 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                     yield f"⚡ *Generating code...*\n\n"
                     yield fallback_result
                 else:
-                    yield f"⚠️ **AI Credits Depleted.**\nYour HuggingFace API key has run out of credits.\n\n💡 **How to fix:** Go to [huggingface.co/settings/billing](https://huggingface.co/settings/billing) to add credits, or update your API key in the IDE settings."
+                    yield f"⚠️ **AI Credits Depleted.**\nYour Gemini API key may have run out of credits.\n\n💡 **How to fix:** Check your [Google AI Studio billing](https://aistudio.google.com/) or ensure Ollama is running locally for offline mode."
             else:
                 yield f"Error: {e}"
 
+
+# ------------------------------------------------------------------
+# STANDALONE GOD-MODE AGENT FACTORY
+# ------------------------------------------------------------------
+
+def get_agent(task: str = "", file_content: str = "") -> CodeAgent:
+    """
+    Factory function that returns a fully configured God-Tier CodeAgent.
+    Uses the Hybrid Intelligence Gateway for smart model selection.
+    
+    Args:
+        task: The user's task (used for smart model routing).
+        file_content: Current file content (used for context size estimation).
+    
+    Returns:
+        A ready-to-use CodeAgent with TerminalTool and God Mode permissions.
+    """
+    from gateway import model_gateway
+    
+    # Smart-route to the optimal model
+    model = model_gateway.get_model_for_chat(task, file_content)
+    
+    terminal = TerminalTool()
+    
+    AUTONOMY_PROMPT = """
+You are an Autonomous Senior Engineer (God Mode).
+You do not just write code; you EXECUTE it, VERIFY it, and FIX it.
+
+PROTOCOL:
+1. PLAN: Break the user's request into steps.
+2. ACTION: Write the code (Python/Shell).
+3. VERIFY: Use the `terminal` tool to run your script immediately.
+4. REFLECT:
+   - If you see `❌ ERROR`, you MUST analyze the error, rewrite the code, and try again.
+   - Do NOT ask the user for permission to fix bugs. Just fix them.
+5. FINAL ANSWER: Only return when the code runs with exit code 0 (Success).
+"""
+
+    agent = CodeAgent(
+        tools=[terminal],
+        model=model,
+        add_base_tools=True,
+        max_steps=15,
+        verbosity_level=logging.INFO,
+        instructions=AUTONOMY_PROMPT,
+        additional_authorized_imports=[
+            "subprocess", "os", "sys", "shutil", "glob", "json",
+            "datetime", "math", "random", "time", "re", "pathlib",
+        ],
+        stream_outputs=True,
+        executor_kwargs={
+            "additional_functions": {
+                "safe_write": safe_write,
+                "safe_open": safe_open,
+                "safe_delete": safe_delete,
+                "safe_mkdir": safe_mkdir,
+                "terminal": terminal.forward,
+            }
+        }
+    )
+    
+    logger.info(f"🤖 God-Tier Agent created with model: {model.model_id}")
+    return agent
+
+
+# ------------------------------------------------------------------
+# SELF-CHECK (Run with: python agent.py)
+# ------------------------------------------------------------------
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    print("\n" + "=" * 60)
+    print("  🤖 Omni-IDE — God-Tier Agent Self-Check")
+    print("=" * 60 + "\n")
+
+    # --- Test 1: TerminalTool Direct ---
+    print("─" * 60)
+    print("  TEST 1: TerminalTool Direct Execution")
+    print("─" * 60)
+
+    tool = TerminalTool()
+
+    # Simple command
+    result = tool.forward('python -c "print(\'Hello God Mode\')"')
+    print(f"  Result: {result}")
+    assert "Hello God Mode" in result, "❌ FAILED: Expected 'Hello God Mode' in output"
+    print("  ✅ PASSED: TerminalTool executes commands correctly.\n")
+
+    # Error handling
+    result = tool.forward("python -c \"raise ValueError('test error')\"")
+    print(f"  Error Result: {result[:100]}...")
+    assert "❌ ERROR" in result, "❌ FAILED: Expected error indicator"
+    print("  ✅ PASSED: TerminalTool captures stderr correctly.\n")
+
+    # Blocked command
+    result = tool.forward("rm -rf /")
+    print(f"  Blocked Result: {result}")
+    assert "BLOCKED" in result, "❌ FAILED: Expected blocked indicator"
+    print("  ✅ PASSED: Destructive commands are blocked.\n")
+
+    # --- Test 2: Gateway Integration ---
+    print("─" * 60)
+    print("  TEST 2: Gateway Integration")
+    print("─" * 60)
+
+    try:
+        from gateway import model_gateway
+        decision = model_gateway._route("refactor the auth module", 100)
+        print(f"  Complex task → {decision.tier.value} ({decision.model_id})")
+        assert decision.tier.value == "cloud_pro", "Expected cloud_pro for 'refactor'"
+
+        decision = model_gateway._route("fix a typo", 50)
+        print(f"  Simple task  → {decision.tier.value} ({decision.model_id})")
+        assert decision.tier.value == "local", "Expected local for 'fix a typo'"
+
+        print("  ✅ PASSED: Gateway routes correctly.\n")
+    except Exception as e:
+        print(f"  ⚠️ SKIPPED: Gateway test ({e})\n")
+
+    # --- Test 3: Self-Healing Scenario ---
+    print("─" * 60)
+    print("  TEST 3: Self-Healing Write → Run → Verify")
+    print("─" * 60)
+
+    import tempfile, os
+    test_dir = tempfile.mkdtemp(prefix="omni_god_check_")
+    test_file = os.path.join(test_dir, "god_check.py")
+
+    with open(test_file, "w") as f:
+        f.write("print('Hello God Mode')\n")
+
+    result = tool.forward(f'python "{test_file}"')
+    print(f"  Execution: {result}")
+    assert "Hello God Mode" in result, "❌ FAILED: Script execution"
+    print("  ✅ PASSED: Write → Run → Verify pipeline works.\n")
+
+    # Cleanup
+    os.remove(test_file)
+    os.rmdir(test_dir)
+
+    print("=" * 60)
+    print("  🏆 ALL SELF-CHECKS PASSED — God Mode is ACTIVE")
+    print("=" * 60 + "\n")

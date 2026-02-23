@@ -1,10 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('static', 'static'), ('.env', '.')]
+datas = [('static', 'static'), ('.env.example', '.')]
 binaries = []
 hiddenimports = ['uvicorn', 'engineio.async_drivers.threading']
 tmp_ret = collect_all('smolagents')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('litellm')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
@@ -17,7 +19,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['torch', 'uvloop', 'tkinter'],
+    excludes=['torch', 'tensorflow', 'transformers', 'huggingface_hub', 'bitsandbytes', 'uvloop', 'tkinter', 'pygame'],
     noarchive=False,
     optimize=0,
 )
@@ -40,6 +42,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['static\\icon.ico'],
+    contents_directory='internal',
 )
 coll = COLLECT(
     exe,

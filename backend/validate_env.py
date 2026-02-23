@@ -1,5 +1,6 @@
 import os
 import sys
+from config import ENV_PATH
 
 # ANSI Colors
 GREEN = '\033[92m'
@@ -38,9 +39,9 @@ def main():
     all_pass = True
 
     # 1. Check .env
-    if check_file('.env', '.env file'):
+    if check_file(str(ENV_PATH), '.env file'):
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(ENV_PATH)
         if not check_env_var('HUGGINGFACE_API_KEY'):
             all_pass = False
     else:

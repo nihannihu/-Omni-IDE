@@ -110,11 +110,11 @@ export default function Dashboard() {
             copilotStore.pushDagUpdate(data);
           } else if (data.type === 'copilot_event') {
             // Phase 7: Handle generic copilot events
-            if (data.source === 'router' && data.payload.type === 'intent') {
+            if (data.source === 'router' && data.event_type === 'intent') {
               copilotStore.pushIntent(data.payload.label, data.payload.confidence, data.payload.explanation);
             } else if (data.source === 'insights') {
               copilotStore.pushInsights(data.payload.insights);
-            } else if (data.payload.type === 'explainability_event') {
+            } else if (data.event_type === 'explainability_event') {
               copilotStore.pushExplainability(data.payload);
             }
           }

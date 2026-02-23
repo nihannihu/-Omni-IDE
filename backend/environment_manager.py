@@ -2,7 +2,7 @@ import os
 import subprocess
 import json
 import time
-from pathlib import Path
+from config import PORTABLE_ROOT
 
 class EnvironmentManager:
     ENV_DIR_NAME = ".antigravity_env"
@@ -10,10 +10,10 @@ class EnvironmentManager:
     
     @staticmethod
     def get_global_cache_dir():
-        # Global cache layer: ~/.antigravity/cache/wheels/
-        cache_dir = os.path.join(os.path.expanduser("~"), ".antigravity", "cache", "wheels")
-        os.makedirs(cache_dir, exist_ok=True)
-        return cache_dir
+        # Portable cache layer: root/.antigravity_cache/wheels/
+        cache_dir = PORTABLE_ROOT / ".antigravity_cache" / "wheels"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return str(cache_dir)
 
     @staticmethod
     def setup_project_env(working_directory, base_python_cmd):

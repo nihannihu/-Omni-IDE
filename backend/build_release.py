@@ -24,6 +24,7 @@ args = [
     '--exclude-module=torch',
     '--exclude-module=uvloop',
     '--exclude-module=tkinter',
+    '--exclude-module=pygame',
 ]
 
 if os.path.exists('static/icon.ico'):
