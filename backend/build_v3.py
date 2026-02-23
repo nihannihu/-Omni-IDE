@@ -34,7 +34,6 @@ args = [
     '--exclude-module=torch',
     '--exclude-module=tensorflow',
     '--exclude-module=transformers',
-    '--exclude-module=huggingface_hub',
     '--exclude-module=bitsandbytes',
     '--exclude-module=uvloop',
     '--exclude-module=tkinter',

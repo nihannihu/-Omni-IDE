@@ -4,7 +4,7 @@
 ; ══════════════════════════════════════════════════════════
 
 #define MyAppName "Omni-IDE"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "Mohammed Nihan"
 #define MyAppURL "https://github.com/nihannihu/-Omni-IDE"
 #define MyAppExeName "OmniIDE.exe"
@@ -23,9 +23,9 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 LicenseFile=docs\LICENSE.txt
-OutputDir=..\installer
+OutputDir=..\..\installer
 OutputBaseFilename=OmniIDE-Setup-v{#MyAppVersion}
-SetupIconFile=static\icon.ico
+SetupIconFile=internal\static\icon.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
