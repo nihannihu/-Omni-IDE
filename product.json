@@ -68,5 +68,8 @@
 		"controlUrl": "",
 		"recommendationsUrl": "https://open-vsx.org/vscode/gallery/workspace/recommendations"
 	},
+	"configurationDefaults": {
+		"extensions.verifySignature": false
+	},
 	"defaultTheme": "Default Dark Modern"
 }
