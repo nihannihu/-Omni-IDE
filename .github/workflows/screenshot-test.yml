@@ -1,12 +1,13 @@
 name: Screenshot Tests
 
+# Disabled for Omni-IDE: Requires Git LFS budget beyond free tier
 on:
   push:
-    branches: [main]
+    branches:
+      - disabled/never-run
   pull_request:
     branches:
-      - main
-      - 'release/*'
+      - disabled/never-run
 
 permissions:
   contents: read

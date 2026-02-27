@@ -1,14 +1,13 @@
 name: Monaco Editor checks
 
+# Disabled for Omni-IDE: Tests require upstream VS Code infrastructure
 on:
   push:
     branches:
-      - main
-      - release/*
+      - disabled/never-run
   pull_request:
     branches:
-      - main
-      - release/*
+      - disabled/never-run
 permissions: {}
 
 jobs:

@@ -1,9 +1,10 @@
 name: Code OSS (node_modules)
 
+# Disabled for Omni-IDE: Requires paid self-hosted runners and macOS-xlarge billing
 on:
   push:
     branches:
-      - main
+      - disabled/never-run
 
 permissions: {}
 
