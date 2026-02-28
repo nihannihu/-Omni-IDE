@@ -19,12 +19,12 @@ class IntentRouter:
     def __init__(self, confidence_threshold: float = 0.8):
         self.confidence_threshold = confidence_threshold
         self.gemini_key = os.getenv("GEMINI_API_KEY")
-        
+
         if not self.gemini_key:
             logger.warning("GEMINI_API_KEY missing! Router will use heuristics only.")
 
     def _build_prompt(self, query: str) -> list:
-        system_prompt = """You are the Omni-IDE Intent Router. 
+        system_prompt = """You are the Omni-IDE Intent Router.
 Your job is to analyze the user's query and output a strict JSON strictly adhering to the schema below.
 DO NOT output any markdown blocks, explanations, or text outside the JSON.
 
@@ -48,19 +48,19 @@ SCHEMA:
         # If no Gemini key, skip LLM and go straight to heuristics
         if not self.gemini_key:
             return self._heuristic_fallback(query)
-        
+
         messages = self._build_prompt(query)
-        
+
         try:
             import litellm
             response = litellm.completion(
-                model="gemini/gemini-1.5-pro-latest",
+                model="gemini/gemini-2.5-flash",
                 api_key=self.gemini_key,
                 messages=messages,
                 max_tokens=300,
             )
             raw_response = response.choices[0].message.content
-            
+
             # Parse JSON (with fallback cleanup)
             try:
                 parsed_data = json.loads(raw_response)
@@ -100,7 +100,7 @@ SCHEMA:
 
         # Phase 7 Sprint 5: Telemetry Hook
         analytics_engine.log_event("route_selected", {
-            "execution_path": execution_path, 
+            "execution_path": execution_path,
             "confidence": score
         })
 
@@ -111,10 +111,10 @@ SCHEMA:
         query_lower = query.lower()
         complex_keywords = ["create", "build", "implement", "scaffold", "make", "setup", "complete"]
         complexity_signals = ["game", "app", "dashboard", "page", "system", "feature", "module"]
-        
+
         is_complex = any(k in query_lower for k in complex_keywords) and \
                      any(s in query_lower for s in complexity_signals)
-        
+
         if is_complex:
             return {
                 "execution_path": "Task Graph Planner",

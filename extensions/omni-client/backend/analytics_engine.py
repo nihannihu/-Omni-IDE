@@ -3,7 +3,7 @@ import os
 import datetime
 from typing import Dict, Any, List
 
-ANALYTICS_FILE = ".antigravity_analytics.json"
+ANALYTICS_FILE = ".omni_analytics.json"
 MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
 
 class AnalyticsEngine:

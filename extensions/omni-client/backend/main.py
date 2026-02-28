@@ -1,3 +1,14 @@
+import sys
+import io
+
+# Force UTF-8 for stdout and stderr to prevent "charmap" errors on Windows
+if sys.platform == "win32":
+    try:
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    except Exception:
+        pass
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,7 +23,6 @@ import subprocess
 import aiofiles
 from pathlib import Path
 from pydantic import BaseModel
-import sys
 import time
 import requests # Added for Ollama health checks
 
@@ -22,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-from config import PORTABLE_ROOT
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "timestamp": time.time()}
 
 from config import PORTABLE_ROOT
 
@@ -197,10 +209,10 @@ async def change_directory(request: ChangeDirRequest):
     """Update the working directory for the File Explorer."""
     global WORKING_DIRECTORY
     target_path = Path(request.path).resolve()
-    
+
     if not target_path.exists() or not target_path.is_dir():
         raise HTTPException(status_code=400, detail="Invalid directory path.")
-    
+
     WORKING_DIRECTORY = request.path
     session_manager.save_last_folder(WORKING_DIRECTORY)
     logger.info(f"Directory changed to: {WORKING_DIRECTORY}")
@@ -215,7 +227,7 @@ async def close_folder():
     from agent import WORKING_DIRECTORY as AGENT_WD
     import agent as agent_module
     agent_module.WORKING_DIRECTORY = None
-    
+
     logger.info("Working Directory closed.")
     return {"status": "closed"}
 
@@ -230,11 +242,11 @@ async def list_files(subpath: str = ""):
                        '.tsx', '.jsx', '.ts', '.scss', '.less', '.svg', '.sh', '.bat',
                        '.dockerfile', '.gitignore', '.editorconfig', '.prettierrc'}
     IGNORED_DIRS = {'venv', 'venv_gpu', 'node_modules', '__pycache__', '.git', '.idea', '.vscode', 'dist', 'build', '.next'}
-    
+
     try:
         if not WORKING_DIRECTORY:
             return {"files": [], "current_dir": None, "no_directory": True}
-        
+
         # Resolve the target directory (base + optional subpath)
         base_path = Path(WORKING_DIRECTORY).resolve()
         if subpath:
@@ -244,21 +256,21 @@ async def list_files(subpath: str = ""):
                 raise HTTPException(status_code=403, detail="Access denied: Path traversal attempt.")
         else:
             target_path = base_path
-        
+
         if not target_path.exists() or not target_path.is_dir():
             raise HTTPException(status_code=404, detail=f"Directory not found: {subpath}")
-        
+
         # Scan the target directory
         with os.scandir(target_path) as entries:
             for entry in entries:
-                if entry.name.startswith('.') and entry.name not in {'.env', '.gitignore', '.editorconfig', '.prettierrc'}: 
+                if entry.name.startswith('.') and entry.name not in {'.env', '.gitignore', '.editorconfig', '.prettierrc'}:
                     continue
-                
+
                 if entry.is_file() and (any(entry.name.endswith(ext) for ext in SAFE_EXTENSIONS) or '.' not in entry.name):
                     files.append({"name": entry.name, "type": "file"})
                 elif entry.is_dir() and entry.name not in IGNORED_DIRS:
                     files.append({"name": entry.name, "type": "directory"})
-        
+
         # Sort directories first, then files alphabetically
         files.sort(key=lambda x: (x['type'] != 'directory', x['name'].lower()))
         return {"files": files, "current_dir": WORKING_DIRECTORY, "subpath": subpath}
@@ -279,7 +291,7 @@ async def get_file_tree():
                        '.dockerfile', '.gitignore', '.editorconfig', '.prettierrc'}
     IGNORED_DIRS = {'venv', 'venv_gpu', 'venv_prod', 'node_modules', '__pycache__',
                     '.git', '.idea', '.vscode', 'dist', 'build', '.next',
-                    '.antigravity_cache', '.antigravity_env', '.cursor',
+                    '.omni_cache', '.omni_env', '.cursor',
                     'Professional-Installer-Prep'}
     MAX_DEPTH = 10
 
@@ -319,7 +331,7 @@ async def get_file_tree():
 async def browse_system(path: str = ""):
     """List subdirectories in a given path for the server-side folder picker."""
     import string
-    
+
     # 1. Handle "Quick Access" / Root for fresh navigation
     if not path or path == "undefined" or path == "null":
         drives = []
@@ -329,17 +341,17 @@ async def browse_system(path: str = ""):
                 drive = f"{letter}:\\"
                 if os.path.exists(drive):
                     drives.append({"name": drive, "path": drive, "type": "drive"})
-        
+
         home = str(Path.home())
         quick_access = [
             {"name": "🏠 Home", "path": home, "type": "quick"},
             {"name": "🖥️ Desktop", "path": str(Path.home() / "Desktop"), "type": "quick"},
             {"name": "📂 Documents", "path": str(Path.home() / "Documents"), "type": "quick"}
         ]
-        
+
         # Filter quick access for existence
         quick_access = [q for q in quick_access if os.path.exists(q["path"])]
-        
+
         return {
             "folders": drives + quick_access,
             "current_path": "",
@@ -348,20 +360,20 @@ async def browse_system(path: str = ""):
 
     try:
         target_path = Path(path).resolve()
-        
+
         if not target_path.exists() or not target_path.is_dir():
              # If path doesn't exist, try parent
              target_path = Path.home()
-        
+
         folders = []
-        
+
         # Add ".." for navigating up, unless at drive root
         parent = target_path.parent
         if parent != target_path:
             folders.append({"name": ".. (Back)", "path": str(parent), "type": "nav"})
 
         # IGNORED_DIRS = {'.git', 'node_modules', '__pycache__', 'venv', '.next'}
-        
+
         with os.scandir(target_path) as entries:
             for entry in entries:
                 try:
@@ -373,10 +385,10 @@ async def browse_system(path: str = ""):
                         })
                 except (PermissionError, OSError):
                     continue
-        
+
         # Sort folders alphabetically
         folders.sort(key=lambda x: (x['type'] != 'folder', x['name'].lower()))
-        
+
         return {
             "folders": folders,
             "current_path": str(target_path),
@@ -395,17 +407,17 @@ async def read_file(filename: str):
             raise HTTPException(status_code=400, detail="No folder is open. Please open a folder first.")
         base_path = Path(WORKING_DIRECTORY).resolve()
         file_path = (base_path / filename).resolve()
-        
+
         if not file_path.is_relative_to(base_path):
              raise HTTPException(status_code=403, detail="Access denied: Path traversal attempt.")
-        
+
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=404, detail=f"File not found: {filename} in {WORKING_DIRECTORY}")
-            
+
         async with aiofiles.open(file_path, mode='r', encoding='utf-8') as f:
             content = await f.read()
         return {"content": content, "path": str(file_path)}
-        
+
     except HTTPException:
         raise  # Let HTTP errors pass through
     except Exception as e:
@@ -428,13 +440,13 @@ async def serve_workspace_file(filepath: str):
             raise HTTPException(status_code=400, detail="No folder is open.")
         base_path = Path(WORKING_DIRECTORY).resolve()
         file_path = (base_path / filepath).resolve()
-        
+
         # Security: must stay within working directory
         if not file_path.is_relative_to(base_path):
             raise HTTPException(status_code=403, detail="Access denied.")
         if not file_path.exists() or not file_path.is_file():
             raise HTTPException(status_code=404, detail=f"File not found: {filepath}")
-        
+
         # FileResponse auto-detects MIME type from extension
         return FileResponse(file_path)
     except HTTPException:
@@ -452,13 +464,13 @@ async def save_file(filename: str, request: CodeRequest):
             raise HTTPException(status_code=400, detail="No folder is open. Please open a folder first.")
         base_path = Path(WORKING_DIRECTORY).resolve()
         file_path = (base_path / filename).resolve()
-        
+
         if not file_path.is_relative_to(base_path):
             raise HTTPException(status_code=403, detail="Access denied.")
-        
+
         async with aiofiles.open(file_path, mode='w', encoding='utf-8') as f:
             await f.write(request.code)
-        
+
         logger.info(f"Saved: {file_path}")
         return {"status": "saved", "path": str(file_path)}
     except HTTPException:
@@ -476,18 +488,18 @@ async def delete_file(filename: str):
             raise HTTPException(status_code=400, detail="No folder is open. Please open a folder first.")
         base_path = Path(WORKING_DIRECTORY).resolve()
         file_path = (base_path / filename).resolve()
-        
+
         if not file_path.is_relative_to(base_path):
             raise HTTPException(status_code=403, detail="Access denied.")
         if not file_path.exists():
             raise HTTPException(status_code=404, detail=f"File not found: {filename}")
-        
+
         import os, shutil
         if file_path.is_file():
             os.remove(file_path)
         elif file_path.is_dir():
             shutil.rmtree(file_path)
-        
+
         logger.info(f"Deleted: {file_path}")
         return {"status": "deleted", "filename": filename}
     except HTTPException:
@@ -708,12 +720,12 @@ async def run_code(request: RunRequest):
         # Determine the correct Python executable
         # In a frozen PyInstaller build, sys.executable is OmniIDE.exe (no external libs)
         # So we fall back to the host system's 'python' command.
-        
+
         env = os.environ.copy()
         env['PYTHONIOENCODING'] = 'utf-8'
         python_cmd = sys.executable
         hunter_log = []
-        
+
         if getattr(sys, 'frozen', False):
             # Strip PyInstaller sandbox variables so system Python can find global libraries (like Pygame)
             env.pop('PYTHONHOME', None)
@@ -724,13 +736,13 @@ async def run_code(request: RunRequest):
             if meipass:
                 clean_path = [p for p in env.get('PATH', '').split(os.pathsep) if not p.startswith(meipass)]
                 env['PATH'] = os.pathsep.join(clean_path)
-            
+
             # The user might have experimental Python versions (like 3.14) on their PATH as the default 'python'
             # Experimental versions lack pre-compiled wheels (like pygame).
             # We must actively hunt for a stable Python version (3.12, 3.11, 3.10) first.
             import shutil
             stable_found = False
-            
+
             # 1. Try explicit version commands (common on Linux/Mac, sometimes Windows)
             for version in ["python3.12", "python3.11", "python3.10", "python3.9", "python3.8", "python3"]:
                 path = shutil.which(version, path=env.get('PATH'))
@@ -741,7 +753,7 @@ async def run_code(request: RunRequest):
                     break
                 elif path:
                     hunter_log.append(f"Rejected alias -> {path}")
-            
+
             # 2. On Windows, explicit versions are rarely on PATH. Use the 'py' launcher to specifically target stable versions.
             py_path = shutil.which("py", path=env.get('PATH')) or r"C:\Windows\py.exe"
             hunter_log.append(f"py_path resolved -> {py_path}")
@@ -759,7 +771,7 @@ async def run_code(request: RunRequest):
                     except Exception as e:
                         hunter_log.append(f"Tested [py {version}] -> Exception: {e}")
                         pass
-                        
+
             # 3. Locate the first valid python.exe on PATH that is NOT the Windows Store alias
             if not stable_found:
                 env_path = env.get("PATH", "")
@@ -812,16 +824,16 @@ async def run_code(request: RunRequest):
                 # 5. Total fallback string (which we know might trigger the store alias, but better than crashing Python)
                 hunter_log.append("WARNING: FAILED ALL HUNTER CHECKS. FALLING BACK TO 'python' STRING.")
                 python_cmd = "python"
-            
+
         base_cmd = python_cmd if isinstance(python_cmd, list) else [python_cmd]
-        
+
         # --- PHASE 2: ZERO-CONFIG PROJECT ENVIRONMENT ---
         from environment_manager import EnvironmentManager
         import time
         venv_cmd, env_logs, env_duration = EnvironmentManager.setup_project_env(WORKING_DIRECTORY, base_cmd)
-        
+
         exec_start_time = time.time()
-        
+
         # --- PHASE 2: LIGHTWEIGHT SECURITY SANDBOX ---
         # Prevent accidental system file writes outside of the workspace directory.
         sandbox_header = f"""
@@ -840,7 +852,7 @@ def _secure_open(path, *args, **kwargs):
 builtins.open = _secure_open
 """
         secure_code = sandbox_header + "\n" + code
-        
+
         proc = subprocess.Popen(
             venv_cmd + ["-c", secure_code],
             stdout=subprocess.PIPE,
@@ -850,21 +862,21 @@ builtins.open = _secure_open
             cwd=WORKING_DIRECTORY,
             env=env
         )
-        
+
         try:
             # Wait up to 2.5 seconds for short scripts (e.g. calculation, print)
             stdout, stderr = proc.communicate(timeout=2.5)
-            
+
             exec_duration = (time.time() - exec_start_time) * 1000
             runtime_logs = f"[RUNTIME] Execution: {exec_duration:.1f}ms\n"
-            
+
             # --- AUTO-PIP DEPENDENCY MANAGER ---
             if proc.returncode != 0 and "ModuleNotFoundError: No module named" in stderr:
                 from dependency_manager import DependencyManager
                 out_app, err_app = DependencyManager.handle_auto_pip(stderr, venv_cmd, env, WORKING_DIRECTORY)
                 stdout += out_app
                 stderr += err_app
-                
+
                 # Rollback corrupt environment if installation critically failed
                 if "❌ [AUTO-PIP] Failed to install" in out_app:
                     EnvironmentManager.rollback_env(WORKING_DIRECTORY)
@@ -875,7 +887,7 @@ builtins.open = _secure_open
                 stderr += diag_proc.stdout
                 stderr += "\n💡 [AI CO-FOUNDER] Your code crashed. Type '/debug' in the chat to automatically analyze and fix this error.\n"
             # -----------------------------------
-            
+
             if proc.returncode != 0 and hunter_log:
                 stderr += "\n\n--- [IDE DIAGNOSTICS] PYTHON HUNTER TRACE ---\n" + "\n".join(hunter_log) + "\n"
 
@@ -895,7 +907,7 @@ builtins.open = _secure_open
                 "stderr": "",
                 "returncode": 0
             }
-            
+
     except Exception as e:
         logger.error(f"Run code error: {e}")
         error_msg = str(e)
@@ -1004,19 +1016,41 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
     global WORKING_DIRECTORY, agent
     user_message = request.text
     try:
-        # Reinitialize gateway + re-create agent if it was stuck in error state
+        # Smart gateway refresh — only reinitialize if API key changed
         try:
-            from gateway import reinitialize_gateway
-            gw = reinitialize_gateway()
-            if gw.gemini_key and (agent._init_error or agent.agent is None):
-                logger.info("🔄 GATEWAY: API key detected — re-creating OmniAgent...")
-                agent_module.model_gateway = gw
-                agent = OmniAgent()
-                logger.info("✅ OmniAgent re-created with valid Gemini key.")
-            else:
+            from gateway import get_gateway, reinitialize_gateway
+            current_gw = get_gateway()
+            new_key = x_gemini_key or os.environ.get("GEMINI_API_KEY", "")
+            old_key = current_gw.gemini_key or ""
+            if new_key and new_key != old_key:
+                logger.info("🔄 GATEWAY: API key changed — persisting and reinitializing...")
+                # CRITICAL: Save key to environment so gateway picks it up
+                os.environ["GEMINI_API_KEY"] = new_key
+                # Also persist to .env for future restarts
+                try:
+                    from config import ENV_PATH
+                    from setup import save_api_key
+                    save_api_key(new_key)
+                    logger.info("💾 GATEWAY: Key saved to .env for persistence.")
+                except Exception as save_err:
+                    logger.warning(f"⚠️ Could not save key to .env: {save_err}")
+                gw = reinitialize_gateway()
+                if gw.gemini_key and (agent._init_error or agent.agent is None):
+                    agent_module.model_gateway = gw
+                    agent = OmniAgent()
+                    logger.info("✅ OmniAgent re-created with valid Gemini key.")
+                else:
+                    agent_module.model_gateway = gw
+                    if hasattr(agent, 'gateway'):
+                        agent.gateway = gw
+            elif new_key and not current_gw.gemini_key:
+                # Key exists in header but gateway missed it — force set
+                os.environ["GEMINI_API_KEY"] = new_key
+                gw = reinitialize_gateway()
                 agent_module.model_gateway = gw
                 if hasattr(agent, 'gateway'):
                     agent.gateway = gw
+                logger.info("🔑 GATEWAY: Key injected from header — agent now uses Gemini.")
         except Exception as gw_err:
             logger.warning(f"Gateway reinit: {gw_err}")
 
@@ -1024,7 +1058,7 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
         # Check both the old field names (workspacePath/fileName) and new field names (projectPath/filePath)
         workspace_path = request.projectPath or request.workspacePath
         file_path = request.filePath or request.fileName
-        
+
         if request.context or workspace_path or request.terminalHint or file_path:
             context_pieces = []
             if workspace_path and workspace_path != "No Folder Opened":
@@ -1033,17 +1067,17 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
                 context_pieces.append(f"Active Terminal: {request.terminalHint}")
             if request.context and request.context != "No active file content":
                 context_pieces.append(f"Active File: {file_path}\n```\n{request.context}\n```")
-                
+
             if context_pieces:
                 user_message += "\n\n[SYSTEM CONTEXT]\n" + "\n\n".join(context_pieces) + "\n"
-            
+
         # ── LIGHTWEIGHT CHAT (greetings, questions, conversation) ──
         if not _is_action_task(request.text):  # check original text for action
             logger.info(f"💬 LIGHTWEIGHT CHAT: {request.text[:50]}")
             import litellm
             from gateway import get_gateway
             gw = get_gateway()
-            
+
             messages = [
                 {"role": "system", "content": (
                     "You are the Omni-IDE AI assistant, created by Nihan Nihu. "
@@ -1064,8 +1098,8 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
                         model="gemini/gemini-2.5-flash",
                         api_key=api_key_to_use,
                         messages=messages,
-                        timeout=10, # Short timeout so it fails fast if congested
-                        max_tokens=500
+                        timeout=30,
+                        max_tokens=2048
                     )
                     return {"response": resp.choices[0].message.content}
                 except litellm.RateLimitError as rate_err:
@@ -1076,7 +1110,7 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
                     cloud_error = "INVALID_KEY"
             else:
                 cloud_error = None
-            
+
             # 2. INSTANT LOCAL FAILOVER (Ollama)
             # CHECK OLLAMA STATUS BEFORE ATTEMPTING
             if not is_ollama_running():
@@ -1103,7 +1137,7 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
                     model="ollama/qwen2.5-coder:3b",
                     messages=messages,
                     api_base="http://localhost:11434",
-                    max_tokens=500
+                    max_tokens=2048
                 )
                 return {
                     "response": "🤖 [Local Mode] " + local_response.choices[0].message.content,
@@ -1116,35 +1150,58 @@ async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(
 
         # ── FULL AGENT (code tasks, file operations, commands) ──
         logger.info(f"🤖 FULL AGENT: {user_message[:50]}")
-        
+
         # Give the agent writing powers by setting working directory to the injected projectPath
         if workspace_path and workspace_path != "No Folder Opened":
             WORKING_DIRECTORY = workspace_path
-            
+
         if not WORKING_DIRECTORY:
             return {"response": "🛑 **Workspace Missing**\n\nPlease click **'Open Folder'** first or open a workspace in VS Code so I can work with your files."}
 
         agent_module.WORKING_DIRECTORY = WORKING_DIRECTORY
         logger.info(f"Agent will write files to: {WORKING_DIRECTORY}")
-        
+
         full_response = ""
+
+        def _run_agent_sync(message):
+            """Run the agent in a sync context (for thread executor)."""
+            result = ""
+            try:
+                response_generator = agent.execute_stream(message)
+                for token in response_generator:
+                    if isinstance(token, dict):
+                        continue
+                    result += str(token)
+            except TypeError:
+                # Fallback for async generators
+                import asyncio
+                loop = asyncio.new_event_loop()
+                async def _collect():
+                    r = ""
+                    async for token in agent.execute_stream(message):
+                        if isinstance(token, dict):
+                            continue
+                        r += str(token)
+                    return r
+                result = loop.run_until_complete(_collect())
+                loop.close()
+            return result
+
         try:
-            response_generator = agent.execute_stream(user_message)
-            for token in response_generator:
-                if isinstance(token, dict):
-                    continue
-                full_response += str(token)
-        except TypeError:
-            async for token in agent.execute_stream(user_message):
-                if isinstance(token, dict):
-                    continue
-                full_response += str(token)
+            # Run agent in a thread so uvicorn event loop stays responsive
+            full_response = await asyncio.wait_for(
+                asyncio.to_thread(_run_agent_sync, user_message),
+                timeout=600  # 10-minute hard timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning("⏱️ Agent execution timed out after 10 minutes.")
+            full_response = "⏱️ **Request Timed Out (10 min)**\n\nThe task was too complex for the current model. Try:\n- Breaking your request into smaller steps\n- Setting up a Gemini API key for faster cloud processing\n- Simplifying your request"
 
         return {"response": full_response}
-        
+
     except Exception as e:
         logger.error(f"Agent Error: {e}")
-        raise HTTPException(status_code=500, detail=f"Agent Crash: {str(e)}")
+        return {"response": f"Agent encountered an error: {str(e)}\n\nPlease try again or simplify your request."}
 
 # --- Template API (Phase 7 Sprint 4) ---
 from template_runner import template_runner
@@ -1166,9 +1223,9 @@ async def run_template(request: TemplateRunRequest, background_tasks: Background
     t = template_runner.get(request.template_id)
     if not t:
         raise HTTPException(status_code=404, detail="Template not found")
-        
+
     loop = asyncio.get_running_loop()
-    
+
     def run_sync():
         def emit_cb(event):
             if isinstance(event, dict):
@@ -1228,7 +1285,7 @@ async def submit_feedback(request: FeedbackRequest):
             raise ValueError("Invalid module name")
         if request.rating not in ["up", "down"]:
             raise ValueError("Invalid rating, must be 'up' or 'down'")
-            
+
         record = feedback_store.add_feedback(
             event_id=request.event_id,
             module=request.module,
@@ -1276,7 +1333,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if data.get("type") == "text_input":
                 text = data.get("text")
                 await manager.send_json({"type": "agent_response_start"}, websocket)
-                
+
                 full_response = ""
                 # Assuming sync generator for now based on previous code
                 for token in agent.execute_stream(text):
@@ -1299,7 +1356,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         await manager.send_json({"type": "agent_token", "text": str(token)}, websocket)
                         full_response += str(token)
-                
+
                 await manager.send_json({"type": "agent_response_end"}, websocket)
 
     except WebSocketDisconnect:
@@ -1311,6 +1368,25 @@ async def websocket_endpoint(websocket: WebSocket):
         except:
             pass
 
+def _kill_stale_port(port: int):
+    """Kill any stale process occupying the given port before we start."""
+    import psutil
+    try:
+        for conn in psutil.net_connections(kind='tcp'):
+            if conn.laddr.port == port and conn.status == 'LISTEN':
+                stale_pid = conn.pid
+                if stale_pid and stale_pid != os.getpid():
+                    try:
+                        proc = psutil.Process(stale_pid)
+                        logger.warning(f"⚠️ Killing stale process on port {port}: PID {stale_pid} ({proc.name()})")
+                        proc.kill()
+                        proc.wait(timeout=5)
+                        logger.info(f"✅ Port {port} freed successfully.")
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                        pass
+    except Exception as e:
+        logger.warning(f"Port cleanup skipped: {e}")
+
 if __name__ == "__main__":
     """
     Entry point when running `python main.py`.
@@ -1318,6 +1394,9 @@ if __name__ == "__main__":
     can connect over HTTP instead of the process exiting
     immediately after initialization.
     """
+    # Auto-resolve port conflicts from stale IDE instances
+    _kill_stale_port(7860)
+
     import uvicorn
     uvicorn.run(
         "main:app",

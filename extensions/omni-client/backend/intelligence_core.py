@@ -7,15 +7,15 @@ from pathlib import Path
 class IntelligenceCore:
     def __init__(self, workspace_dir: str):
         self.workspace_dir = Path(workspace_dir) if workspace_dir else None
-        self.memory_file = self.workspace_dir / ".antigravity_memory.json" if self.workspace_dir else None
-        self.tasks_file = self.workspace_dir / ".antigravity_tasks.json" if self.workspace_dir else None
+        self.memory_file = self.workspace_dir / ".omni_memory.json" if self.workspace_dir else None
+        self.tasks_file = self.workspace_dir / ".omni_tasks.json" if self.workspace_dir else None
 
     # ------------------------------------------------------------------
     # 1. CONTEXT COLLECTOR (Git-Aware)
     # ------------------------------------------------------------------
     def _parse_gitignore(self) -> List[str]:
         """Reads .gitignore rules to prevent indexing unhelpful files."""
-        base_ignores = ['.git', 'node_modules', '__pycache__', 'venv', 'env', '.env', '*.pyc', '*.exe', '.antigravity*']
+        base_ignores = ['.git', 'node_modules', '__pycache__', 'venv', 'env', '.env', '*.pyc', '*.exe', '.omni*']
         if not self.workspace_dir: return base_ignores
         
         gitignore_path = self.workspace_dir / '.gitignore'
@@ -102,7 +102,7 @@ class IntelligenceCore:
         mem["notes"].append(note)
         
         # [MEMORY COMPACTION] Retain only the 10 most recent chronological notes 
-        # to prevent .antigravity_memory.json ballooning and injecting context window faults.
+        # to prevent .omni_memory.json ballooning and injecting context window faults.
         if len(mem["notes"]) > 10:
             mem["notes"] = mem["notes"][-10:]
             

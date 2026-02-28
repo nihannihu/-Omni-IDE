@@ -26,6 +26,11 @@
         "title": "Start Omni Agent"
       },
       {
+        "command": "omni-client.openChat",
+        "title": "Omni-Agent: Open Chat",
+        "category": "Omni Intelligence"
+      },
+      {
         "command": "omni.setGeminiKey",
         "title": "Omni: Set Gemini API Key",
         "category": "Omni Intelligence"

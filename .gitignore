@@ -37,3 +37,14 @@ VSCode-darwin-x64/
 *.exe
 *.zip
 *.vsix
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+*.log
+
+# Omni-IDE Metadata
+.antigravity_*
+.omni_*

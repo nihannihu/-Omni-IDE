@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class ProjectMemory:
     def __init__(self, workspace_dir: str):
         self.workspace_dir = workspace_dir
-        self.memory_file = os.path.join(workspace_dir, ".antigravity_memory.json")
+        self.memory_file = os.path.join(workspace_dir, ".omni_memory.json")
         self.cache = None
 
     def load_memory(self) -> Dict[str, Any]:

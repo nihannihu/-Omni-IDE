@@ -68,32 +68,32 @@ def safe_write(filename: str, content: str) -> str:
     base = get_base_path()
     filename = filename.lstrip("/").lstrip("\\")
     filepath = (base / filename).resolve()
-    
+
     if not str(filepath).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (Path Traversal): {filename}")
-        
+
     filepath.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Phase 5 Diff Staging Hook
     from diff_staging_layer import DiffStagingLayer
     layer = DiffStagingLayer(str(base))
     patch_result = layer.create_patch(str(filepath), content)
-    
+
     if "error" in patch_result:
         logger.error(f"[ROLLBACK] Patch proposal failed: {patch_result['error']}")
         return f"ERROR: {patch_result['error']}"
-        
+
     if patch_result.get("status") == "unchanged":
         logger.info(f"safe_write: {filename} was unchanged.")
         return str(filepath)
-        
+
     # If the file exists and is being heavily modified, stage it.
     if patch_result.get("action") == "modify":
         session_id = patch_result.get("session_id")
         logger.warning(f"[STAGING] {filename} modification intercepted. Session ID: {session_id}")
         # For agent loop feedback, tell it the write succeeded but is Pending Approval
         return f"File '{filename}' staged for user approval. Session ID: {session_id}"
-        
+
     # If it's a completely new file creation, write it instantly to not slow down scaffolding
     filepath.write_text(content, encoding='utf-8')
     logger.info(f"safe_write: Created entirely new file {filepath}")
@@ -105,18 +105,18 @@ def safe_open(filepath_str, mode='r', **kwargs):
     import builtins
     base = get_base_path()
     filepath = Path(filepath_str)
-    
+
     if not filepath.is_absolute():
         filepath = base / filepath
     filepath = filepath.resolve()
-    
+
     # CRITICAL SECURITY FIX: Block path traversal for ALL modes (including read)
     if not str(filepath).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (Access Outside Sandbox): {filepath}")
-        
+
     if any(m in mode for m in ('w', 'a', 'x')):
         filepath.parent.mkdir(parents=True, exist_ok=True)
-        
+
     return builtins.open(str(filepath), mode, **kwargs)
 
 def safe_mkdir(path_str, *args, **kwargs):
@@ -124,14 +124,14 @@ def safe_mkdir(path_str, *args, **kwargs):
     from pathlib import Path
     base = get_base_path()
     path = Path(path_str)
-    
+
     if not path.is_absolute():
         path = base / path
     path = path.resolve()
-    
+
     if not str(path).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (mkdir Outside Sandbox): {path}")
-    
+
     path.mkdir(parents=True, exist_ok=True)
     return str(path)
 
@@ -144,13 +144,13 @@ def safe_delete(filename):
     if not path.is_absolute():
         path = base / path
     path = path.resolve()
-    
+
     if not str(path).startswith(str(base.resolve())):
         raise ValueError(f"Security Block (Delete Outside Sandbox): {path}")
-    
+
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
-    
+
     if path.is_file():
         os.remove(path)
         logger.info(f"Deleted file: {path}")
@@ -169,11 +169,11 @@ def open_in_browser(filepath_str):
     from pathlib import Path
     desktop = get_desktop_path()
     filepath = Path(filepath_str)
-    
+
     if not filepath.is_absolute():
         filepath = desktop / filepath
     filepath = filepath.resolve()
-    
+
     wb.open(filepath.as_uri())
     return str(filepath)
 
@@ -184,11 +184,11 @@ def create_web_page(folder_name: str, page_type: str = "landing", title: str = "
     folder_path = safe_mkdir(folder_name)
     from pathlib import Path
     folder = Path(folder_path)
-    
+
     bg = "#0f0f1a" if theme == "dark" else "#f0f2f5"
     text = "#e0e0e0" if theme == "dark" else "#333333"
     accent = "#6c63ff"
-    
+
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -242,20 +242,67 @@ class TerminalTool(Tool):
 
     # Commands that are too dangerous even for God Mode
     BLOCKED_COMMANDS = frozenset({
-        "format", "del /s", "rd /s /q C:", "rm -rf /",
-        "shutdown", "restart", ":(){", "mkfs",
+        "format", "del /q C:", "rd /s /q C:", "shutdown", "restart", ":(){", "mkfs",
     })
+
+    def _translate_command(self, command: str) -> str:
+        """Translate common Unix commands to Windows equivalents."""
+        if sys.platform != "win32":
+            return command
+
+        # Simple regex-based translation for common tools
+        parts = command.split()
+        if not parts:
+            return command
+
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        # Translation Table
+        if cmd == "cat":
+            return f"type {' '.join(args)}"
+        if cmd == "ls":
+            # ls -la -> dir /a
+            if args and "-l" in args[0]:
+                return f"dir {' '.join(args[1:])}"
+            return f"dir {' '.join(args)}"
+        if cmd == "rm":
+            # rm -rf -> rd /s /q
+            if args and "-rf" in args[0]:
+                return f"rd /s /q {' '.join(args[1:])}"
+            return f"del /q {' '.join(args)}"
+        if cmd == "cp":
+            return f"copy {' '.join(args)}"
+        if cmd == "mv":
+            return f"move {' '.join(args)}"
+        if cmd == "clear":
+            return "cls"
+        if cmd == "grep":
+            return f"findstr {' '.join(args)}"
+        if cmd == "which":
+            return f"where {' '.join(args)}"
+        if cmd == "touch":
+            return f"type nul > {' '.join(args)}"
+
+        return command
 
     def forward(self, command: str) -> str:
         """Execute a command and return structured stdout/stderr output."""
+
+        # Translate command for Windows if necessary
+        original_command = command
+        command = self._translate_command(command)
 
         # Safety check: block catastrophically destructive commands
         cmd_lower = command.lower().strip()
         for blocked in self.BLOCKED_COMMANDS:
             if blocked in cmd_lower:
-                return f"🛑 BLOCKED: Command '{command}' is too dangerous. Refusing to execute."
+                return f"🛑 BLOCKED: Command '{original_command}' (translated to '{command}') is too dangerous. Refusing to execute."
 
-        logger.info(f"🖥️  TERMINAL: Executing → {command}")
+        if command != original_command:
+            logger.info(f"🖥️  TERMINAL: Translated → {original_command} to {command}")
+        else:
+            logger.info(f"🖥️  TERMINAL: Executing → {command}")
 
         try:
             # Determine working directory
@@ -334,20 +381,20 @@ class VisionTool(Tool):
             image_data = self.get_image_func()
             if not image_data:
                 return "No screen frame available. Ask the user to verify screen sharing is on."
-            
+
             # Clean base64 string
             if "," in image_data:
                  image_data = image_data.split(",")[1]
-            
+
             logger.info(f"VisionTool: Analyzing screen with question: '{question}' (Gemini Vision)")
-            
+
             if not self.gemini_key:
                 return "Vision unavailable: GEMINI_API_KEY not configured in .env"
 
             # Use Gemini Pro Vision via LiteLLM
             import litellm
             response = litellm.completion(
-                model="gemini/gemini-1.5-pro-latest",
+                model="gemini/gemini-2.5-flash",
                 api_key=self.gemini_key,
                 messages=[
                     {
@@ -360,11 +407,11 @@ class VisionTool(Tool):
                 ],
                 max_tokens=500
             )
-            
+
             result = response.choices[0].message.content
             logger.info(f"VisionTool Result: {result[:50]}...")
             return f"Screen Insight: {result}"
-            
+
         except Exception as e:
             logger.error(f"VisionTool Error: {e}")
             return f"Error analyzing screen: {str(e)}"
@@ -382,15 +429,15 @@ class OmniAgent:
             message="OmniAgent initialization started",
             data={},
         )
-        
+
         # Vision Caching
         self.image_lock = ThreadLock()
         self.latest_image = None
-        
+
         def get_latest_image():
             with self.image_lock:
                 return self.latest_image
-        
+
         self.vision_tool = VisionTool(get_latest_image)
         self.terminal_tool = TerminalTool()
 
@@ -416,16 +463,24 @@ class OmniAgent:
                 message="Gateway import failed, falling back to local-only",
                 data={"error": str(e)},
             )
-        
+
         # PROMPT: God-Tier Autonomous Engineer Protocol
         SYSTEM_PROMPT = r"""
-You are the Omni-IDE Core Intelligence, a senior software architect designed for Mohammed Nihan. 
+You are the Omni-IDE Core Intelligence, a senior software architect designed for Mohammed Nihan.
 Your primary directives are:
 1. CONTEXTUAL SUPREMACY: Always prioritize the provided file context and workspacePath over general knowledge.
 2. AGENTIC ACTION: You have permission to read, write, and debug files within the project root. If a user asks to fix a bug, generate the exact code and use your file-writing tool to apply it.
 3. ERROR TRIAGE: When a terminal error is provided, analyze the stack trace and suggest the specific line in the specific file that needs changing.
 4. CONCISE EXPERTISE: Do not give long introductions. Provide high-quality, production-ready code using modern standards (ES6+, Python 3.10+, FastAPI).
 5. HYBRID AWARENESS: You are currently running in a Hybrid environment (Gemini Cloud + Ollama Local).
+
+=== WINDOWS ENVIRONMENT (CRITICAL) ===
+You are running on WINDOWS.
+- Use `dir` instead of `ls`.
+- Use `type` instead of `cat`.
+- Use `python` (not `python3`).
+- Use `del` or `rd` instead of `rm`.
+- Use `copy`/`move` instead of `cp`/`mv`.
 
 === AUTONOMY PROTOCOL ===
 
@@ -453,7 +508,7 @@ RULE 2 - FILE EDITING (when user says "edit", "modify", "add", "change", "update
   Step 3: WRITE the modified content back:
     `safe_write("filename.html", modified_content)`
   Step 4: `final_answer("DONE: filename.html")`
-  
+
   WARNING: You MUST include ALL the original content plus your changes.
   If you only write new content, you will DELETE the original file content!
 
@@ -545,7 +600,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                 try:
                     # ── CLOUD-PRIMARY STRATEGY ──────────────────────────
                     # Gemini is the primary brain for all user tasks.
-                    # Local 3B models are too small for smolagents' 
+                    # Local 3B models are too small for smolagents'
                     # structured tool-calling protocol (they run code in
                     # sandbox but don't use safe_write to persist files).
                     # Local is only used as offline fallback.
@@ -637,10 +692,10 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                 )
                 try:
                     self.agent = CodeAgent(
-                        tools=[], 
-                        model=self.model, 
+                        tools=[],
+                        model=self.model,
                         add_base_tools=False,
-                        max_steps=10, 
+                        max_steps=10,
                         verbosity_level=logging.INFO,
                         instructions=SYSTEM_PROMPT,
                         additional_authorized_imports=[
@@ -686,7 +741,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                     message="OmniAgent initialized in degraded mode (no model)",
                     data={"init_error": self._init_error},
                 )
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize AI Agent: {e}")
             raise e
@@ -700,13 +755,13 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
         """
         Use the Hybrid Intelligence Gateway to select the optimal model
         for the given task and context.
-        
+
         Returns a ready-to-use model instance, or None if the gateway
         is unavailable (fallback to Local Qwen via Ollama).
         """
         if not self.gateway:
             return None
-        
+
         try:
             model = self.gateway.get_model_for_chat(task, file_content)
             logger.info(f"🧠 Smart Model selected: {model.model_id}")
@@ -719,7 +774,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
         """Execute a task context-aware and yield ONLY the clean final answer to the frontend."""
         logger.info(f"Agent task received: {task}")
         final_answer = None
-        
+
         # Graceful error if no model was available at init time
         if self._init_error or self.agent is None:
             yield (
@@ -729,18 +784,18 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                 "Run `ollama serve` then `ollama pull qwen2.5-coder:7b` to enable local AI."
             )
             return
-        
+
         # --- PHASE 3: INTELLIGENCE CORE WIRING ---
         from intelligence_core import IntelligenceCore
         core = IntelligenceCore(WORKING_DIRECTORY)
         context_prompt = ""
-        
+
         if WORKING_DIRECTORY:
             # Multi-Agent Orchestrator Handling (Phase 4)
             from agent_orchestrator import AgentOrchestrator
             orchestrator = AgentOrchestrator(core)
             cmd_prefix = task.split(" ")[0]
-            
+
             # --- LLM Runner Definition (Bridge for simple/complex tasks) ---
             def llm_runner(prompt: str) -> str:
                 res = None
@@ -759,19 +814,19 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
             # --- PHASE 6: INTENT ROUTING MVP ---
             from intent_router import IntentRouter
             router = IntentRouter(confidence_threshold=0.8)
-            
+
             # Skip routing for explicit slash commands to preserve legacy UX
             if not task.startswith("/"):
                 yield f"🧠 *Intelligence Layer: Routing Intent...*\n\n"
-                
+
                 try:
                     routing_result = router.route_intent(task)
                 except Exception as route_err:
                     logger.error(f"IntentRouter crashed: {route_err}")
                     routing_result = {"execution_path": "Direct Execution", "reason": f"Router error: {route_err}"}
-                
+
                 exec_path = routing_result.get("execution_path")
-                
+
                 # Phase 7 Sprint 1: Emit Intent to Copilot Store via WebSocket
                 yield {
                     "__copilot_event__": True,
@@ -783,7 +838,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                         "explanation": routing_result.get("reason", "No explanation provided.")
                     }
                 }
-                
+
                 # Phase 7 Sprint 2: Emit Explainability reasoning
                 from explainability import ExplainabilityEmitter
                 yield ExplainabilityEmitter.emit(
@@ -792,10 +847,10 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                     summary=f"Classified as '{exec_path}' based on request structure.",
                     context={"confidence": routing_result.get("confidence", 0.0), "intent": exec_path}
                 )
-                
+
                 # Templates are used ONLY as a silent fallback when LLM is unavailable.
                 # The LLM path runs first via the normal Planner/Direct flow below.
-                
+
                 if exec_path == "Clarification Needed":
                     yield f"🤔 *I'm not exactly sure what to execute.* (Ambiguous Intent)\nReason: {routing_result.get('reason')}\n\nCould you clarify your request?"
                     return
@@ -803,17 +858,17 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                     from planner import PlannerEngine
                     planner = PlannerEngine()
                     yield f"🧭 *High Complexity Detected. Engaging Task Graph Planner...*\n\n"
-                    
+
                     try:
                         graph = planner.load_dummy_graph("complex", user_request=task)
                         yield f"🗺️ *Graph built: {len(graph.nodes)} node(s). Executing sequentially...*\n\n"
-                        
+
                         context_ext = {
-                            "task": task, 
+                            "task": task,
                             "workspace": core.get_workspace_context(max_files=5),
                             "runner": llm_runner
                         }
-                        
+
                         # Phase 6 Sprint 4: Stream dag_update events for Timeline UI
                         completed_count = 0
                         has_failed = False
@@ -827,7 +882,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                                 completed_count = len(dag_event.get("nodes", []))
                             if any_fail:
                                 has_failed = True
-                        
+
                         if has_failed:
                             yield f"❌ **Task Graph Execution Halted.**\nCheck the Timeline panel for details."
                         else:
@@ -848,15 +903,15 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                         else:
                             yield f"❌ **Planner Engine Failed.**\nError: {pe}"
                     return
-            
+
             # --- Phase 4 Fallback / Direct Execution ---
             if cmd_prefix in orchestrator.agents:
                 user_task = task.replace(cmd_prefix, "").strip()
                 agent_name = orchestrator.agents[cmd_prefix].name
-                
+
                 # Let user know the agent is thinking (streaming UX)
                 yield f"⚙️ *{agent_name} is analyzing the workspace...*\n\n"
-                
+
                 returned_agent, final_text = orchestrator.route_and_execute(cmd_prefix, user_task, llm_runner)
                 yield final_text
                 return
@@ -875,7 +930,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                 from insights_engine import InsightsEngine
                 engine = InsightsEngine(WORKING_DIRECTORY)
                 insights = engine.run_scan()
-                
+
                 # Phase 7 Sprint 1: Emit Insights to Copilot UI
                 yield {
                     "__copilot_event__": True,
@@ -885,7 +940,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                         "insights": insights
                     }
                 }
-                
+
                 # Phase 7 Sprint 2: Emit Explainability reasoning
                 from explainability import ExplainabilityEmitter
                 yield ExplainabilityEmitter.emit(
@@ -894,12 +949,12 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                     summary=f"Background scan completed. Found {len(insights)} insights.",
                     context={"insight_count": len(insights)}
                 )
-                
+
                 yield engine.format_insights_text()
                 return
             else:
                 # Standard Contextual Chat
-                
+
                 # --- PHASE 6: PROJECT MEMORY MVP ---
                 try:
                     from memory import ProjectMemory
@@ -908,9 +963,9 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                 except Exception as e:
                     logger.error(f"Project Memory injection failed: {e}")
                     memory_context = ""
-                    
+
                 proj_memory_block = f"### PROJECT MEMORY ###\n{memory_context}\n" if memory_context else ""
-                
+
                 memory = core.load_memory()
                 recent_notes = "\n".join(memory.get("notes", []))
                 context_prompt = f"""
@@ -925,13 +980,13 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
 """
             # Save interaction to memory
             core.add_memory_note(f"User Request: {task[:100]}")
-            
+
             task_to_run = context_prompt
         else:
             task_to_run = task
-            
+
         logger.info(f"Context-Aware Task Length: {len(task_to_run)} chars")
-        
+
         try:
             for step in self.agent.run(task_to_run, stream=True):
                 # Log internals for debugging (NOT sent to frontend)
@@ -954,24 +1009,24 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                 yield final_answer
             else:
                 yield "Task completed."
-                
+
         except GeneratorExit:
             logger.info("Client disconnected.")
             return
         except Exception as e:
             logger.error(f"Execution Error: {e}")
             err_str = str(e).lower()
-            
+
             # ── RUNTIME FALLBACK: Local model failed → Swap to Gemini Cloud ──
             is_model_error = any(kw in err_str for kw in [
                 "not found", "connection refused", "connection error",
                 "timeout", "connect_tcp", "ollama", "404",
             ])
-            
+
             if is_model_error and self.gateway and self.gateway.gemini_key:
                 logger.warning("⚠️ LOCAL MODEL FAILED AT RUNTIME. Swapping to Gemini Cloud...")
                 yield "⚠️ *Local model unavailable. Switching to Gemini Cloud...*\n\n"
-                
+
                 try:
                     cloud_model = self.gateway.get_cloud_model()
                     if cloud_model:
@@ -979,7 +1034,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                         self.agent.model = cloud_model
                         self.model = cloud_model
                         logger.info(f"☁️ RUNTIME SWAP: Now using {cloud_model.model_id}")
-                        
+
                         # Retry the task with the cloud model
                         final_answer = None
                         for step in self.agent.run(task_to_run, stream=True):
@@ -990,7 +1045,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                                     final_answer = str(step.action_output)
                             elif isinstance(step, FinalAnswerStep):
                                 final_answer = str(step.output)
-                        
+
                         if final_answer:
                             yield final_answer
                         else:
@@ -1002,7 +1057,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                     logger.error(f"☁️ Cloud retry failed: {cloud_err}")
                     yield f"Error: Cloud fallback also failed: {cloud_err}"
                     return
-            
+
             if "402" in err_str or "payment required" in err_str or "credit balance" in err_str:
                 # --- GRACEFUL FALLBACK: Use Instant Generation templates ---
                 from offline_engine import execute_offline
@@ -1024,24 +1079,31 @@ def get_agent(task: str = "", file_content: str = "") -> CodeAgent:
     """
     Factory function that returns a fully configured God-Tier CodeAgent.
     Uses the Hybrid Intelligence Gateway for smart model selection.
-    
+
     Args:
         task: The user's task (used for smart model routing).
         file_content: Current file content (used for context size estimation).
-    
+
     Returns:
         A ready-to-use CodeAgent with TerminalTool and God Mode permissions.
     """
     from gateway import model_gateway
-    
+
     # Smart-route to the optimal model
     model = model_gateway.get_model_for_chat(task, file_content)
-    
+
     terminal = TerminalTool()
-    
+
     AUTONOMY_PROMPT = """
 You are an Autonomous Senior Engineer (God Mode).
 You do not just write code; you EXECUTE it, VERIFY it, and FIX it.
+
+=== WINDOWS ENVIRONMENT (CRITICAL) ===
+You are running on WINDOWS.
+- Use `dir` instead of `ls`.
+- Use `type` instead of `cat`.
+- Use `python` (not `python3`).
+- Use `del` or `rd` instead of `rm`.
 
 PROTOCOL:
 1. PLAN: Break the user's request into steps.
@@ -1075,7 +1137,7 @@ PROTOCOL:
             }
         }
     )
-    
+
     logger.info(f"🤖 God-Tier Agent created with model: {model.model_id}")
     return agent
 

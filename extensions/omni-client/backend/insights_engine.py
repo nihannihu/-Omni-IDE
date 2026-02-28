@@ -44,7 +44,7 @@ class Insight:
 SAFE_EXTENSIONS = {'.py', '.js', '.ts', '.tsx', '.jsx', '.html', '.css',
                    '.json', '.md', '.yaml', '.yml', '.toml', '.sh'}
 IGNORED_DIRS = {'venv', 'venv_gpu', 'node_modules', '__pycache__', '.git',
-                '.idea', '.vscode', 'dist', 'build', '.next', '.antigravity'}
+                '.idea', '.vscode', 'dist', 'build', '.next', '.omni'}
 
 def _collect_files(workspace: str, max_files: int = 200) -> List[Path]:
     """Collect workspace files respecting scan limits."""

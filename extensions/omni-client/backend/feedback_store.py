@@ -5,7 +5,7 @@ import datetime
 from typing import Dict, Any, List, Optional, Literal
 from analytics_engine import analytics_engine
 
-FEEDBACK_FILE = ".antigravity_feedback.json"
+FEEDBACK_FILE = ".omni_feedback.json"
 
 class FeedbackStore:
     """

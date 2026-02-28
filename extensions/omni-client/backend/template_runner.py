@@ -5,8 +5,8 @@ from typing import Dict, Any, List, Optional
 from planner import TaskGraph, TaskNode, PlannerEngine
 from analytics_engine import analytics_engine
 
-TEMPLATES_FILE = ".antigravity_templates.json"
-ANALYTICS_FILE = ".antigravity_analytics.json"
+TEMPLATES_FILE = ".omni_templates.json"
+ANALYTICS_FILE = ".omni_analytics.json"
 
 class TemplateRunner:
     """

@@ -5,13 +5,13 @@ import time
 from config import PORTABLE_ROOT
 
 class EnvironmentManager:
-    ENV_DIR_NAME = ".antigravity_env"
-    LOCKFILE_NAME = ".antigravity_lock.json"
+    ENV_DIR_NAME = ".omni_env"
+    LOCKFILE_NAME = ".omni_lock.json"
     
     @staticmethod
     def get_global_cache_dir():
-        # Portable cache layer: root/.antigravity_cache/wheels/
-        cache_dir = PORTABLE_ROOT / ".antigravity_cache" / "wheels"
+        # Portable cache layer: root/.omni_cache/wheels/
+        cache_dir = PORTABLE_ROOT / ".omni_cache" / "wheels"
         cache_dir.mkdir(parents=True, exist_ok=True)
         return str(cache_dir)
 

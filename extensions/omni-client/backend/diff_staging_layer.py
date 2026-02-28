@@ -23,7 +23,7 @@ class DiffStagingLayer:
         self.sessions: Dict[str, Dict[str, Any]] = {}
         
         # Optional persistence layer for staging data
-        self.persist_file = self.workspace_dir / ".antigravity_staging.json" if self.workspace_dir else None
+        self.persist_file = self.workspace_dir / ".omni_staging.json" if self.workspace_dir else None
         self._load_sessions()
 
     def _load_sessions(self):
