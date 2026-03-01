@@ -46,36 +46,117 @@ async function activate(context) {
 	outputChannel.appendLine("Omni-Agent Activating (UTF-8 Mode)...");
 	const config = vscode.workspace.getConfiguration('omni-agent');
 	const userPython = config.get('pythonPath');
-	let pythonCommand = userPython || 'python';
-	try {
-		cp.execSync(`${pythonCommand} --version`);
-	}
-	catch {
-		if (!userPython) {
-			pythonCommand = 'python3';
-			try {
-				cp.execSync('python3 --version');
-			}
-			catch {
-				pythonCommand = 'python';
-			}
-		}
-	}
-	const backendPath = path.join(context.extensionPath, 'backend', 'main.py');
-	outputChannel.appendLine(`Backend Path: ${backendPath}`);
-	outputChannel.appendLine(`Python Command: ${pythonCommand}`);
-	const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
-	pythonProcess = cp.spawn(pythonCommand, [backendPath], { env });
-	pythonProcess.stdout?.on('data', (data) => {
-		outputChannel.appendLine(`[Backend]: ${data}`);
-	});
-	pythonProcess.stderr?.on('data', (data) => {
-		const msg = data.toString();
-		outputChannel.appendLine(`[Backend Log]: ${msg}`);
-	});
-	pythonProcess.on('error', (err) => {
-		vscode.window.showErrorMessage(`Failed to start Python: ${err.message}`);
-	});
+let pythonCommand = userPython || 'python';
+let pythonFound = false;
+const candidates = userPython ? [userPython] : ['python', 'python3', 'py'];
+for (const cmd of candidates) {
+try {
+cp.execSync(`${cmd} --version`, { stdio: 'pipe', timeout: 10000 });
+pythonCommand = cmd;
+pythonFound = true;
+break;
+} catch { /* try next */ }
+}
+if (!pythonFound) {
+const action = await vscode.window.showErrorMessage(
+"Omni-Agent: Python is not installed. The AI backend requires Python 3.9+ to run.",
+"Download Python", "Configure Path"
+);
+if (action === "Download Python") {
+vscode.env.openExternal(vscode.Uri.parse("https://www.python.org/downloads/"));
+} else if (action === "Configure Path") {
+vscode.commands.executeCommand('workbench.action.openSettings', 'omni-agent.pythonPath');
+}
+outputChannel.appendLine("ERROR: No Python interpreter found. Backend cannot start.");
+outputChannel.show();
+const provider = new OmniChatProvider(context.extensionUri, context.secrets, context);
+context.subscriptions.push(vscode.window.registerWebviewViewProvider('omni-client.chatView', provider, { webviewOptions: { retainContextWhenHidden: true } }));
+return;
+}
+outputChannel.appendLine(`Python Command: ${pythonCommand}`);
+const backendDir = path.join(context.extensionPath, 'backend');
+const requirementsPath = path.join(backendDir, 'requirements.txt');
+const fs = require('fs');
+if (fs.existsSync(requirementsPath)) {
+outputChannel.appendLine("Checking/installing backend dependencies...");
+try {
+await vscode.window.withProgress({
+location: vscode.ProgressLocation.Notification,
+title: "Omni-Agent: Setting up backend dependencies...",
+cancellable: false
+}, async () => {
+const installResult = cp.spawnSync(pythonCommand, ['-m', 'pip', 'install', '--user', '--quiet', '-r', requirementsPath], {
+cwd: backendDir,
+env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
+timeout: 300000,
+stdio: 'pipe'
+});
+if (installResult.stdout) outputChannel.appendLine(`[pip]: ${installResult.stdout.toString()}`);
+if (installResult.stderr) {
+const errMsg = installResult.stderr.toString();
+if (errMsg && !errMsg.includes('already satisfied')) {
+outputChannel.appendLine(`[pip warn]: ${errMsg}`);
+}
+}
+if (installResult.status !== 0) {
+outputChannel.appendLine(`WARNING: pip install exited with code ${installResult.status}. Backend may fail to start.`);
+} else {
+outputChannel.appendLine("Dependencies installed successfully.");
+}
+});
+} catch (pipErr) {
+outputChannel.appendLine(`WARNING: Dependency install failed: ${pipErr.message}. Trying to start backend anyway...`);
+}
+}
+const backendPath = path.join(backendDir, 'main.py');
+outputChannel.appendLine(`Backend Path: ${backendPath}`);
+const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
+let backendStarted = false;
+for (let attempt = 1; attempt <= 3; attempt++) {
+outputChannel.appendLine(`Starting backend (attempt ${attempt}/3)...`);
+pythonProcess = cp.spawn(pythonCommand, [backendPath], { env, cwd: backendDir });
+pythonProcess.stdout?.on('data', (data) => {
+outputChannel.appendLine(`[Backend]: ${data}`);
+});
+pythonProcess.stderr?.on('data', (data) => {
+const msg = data.toString();
+outputChannel.appendLine(`[Backend Log]: ${msg}`);
+});
+let processExited = false;
+pythonProcess.on('error', (err) => {
+processExited = true;
+outputChannel.appendLine(`Backend process error: ${err.message}`);
+});
+pythonProcess.on('exit', (code) => {
+if (code !== null && code !== 0) {
+processExited = true;
+outputChannel.appendLine(`Backend exited with code ${code}`);
+}
+});
+const maxWait = 30000;
+const interval = 2000;
+let waited = 0;
+while (waited < maxWait) {
+await new Promise(r => setTimeout(r, interval));
+waited += interval;
+if (processExited) break;
+try {
+const resp = await fetch('http://127.0.0.1:7860/api/health', { signal: AbortSignal.timeout(3000) });
+if (resp.ok) { backendStarted = true; break; }
+} catch { /* not ready yet */ }
+}
+if (backendStarted) { outputChannel.appendLine("Backend is healthy and ready!"); break; }
+if (!processExited) { try { pythonProcess.kill(); } catch {} }
+if (attempt < 3) {
+outputChannel.appendLine(`Backend did not respond. Retrying in 3s...`);
+await new Promise(r => setTimeout(r, 3000));
+}
+}
+if (!backendStarted) {
+outputChannel.appendLine("ERROR: Backend failed to start after 3 attempts.");
+outputChannel.show();
+vscode.window.showErrorMessage("Omni-Agent: Backend failed to start. Check Output > Omni-Agent for details.", "Show Logs").then(sel => { if (sel) outputChannel.show(); });
+}
 	const provider = new OmniChatProvider(context.extensionUri, context.secrets, context);
 	context.subscriptions.push(vscode.window.registerWebviewViewProvider('omni-client.chatView', provider, {
 		webviewOptions: {
