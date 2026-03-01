@@ -81,6 +81,9 @@ Type: filesandordirs; Name: "{app}\bin"
 Type: files; Name: "{app}\old_*"
 Type: files; Name: "{app}\new_*"
 Type: files; Name: "{app}\updating_version"
+; Clean up user AppData on uninstall (settings, secrets, cached keys)
+Type: filesandordirs; Name: "{userappdata}\OMNI-IDE"
+Type: filesandordirs; Name: "{localappdata}\OMNI-IDE"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

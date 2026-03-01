@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function (o, m, k, k2) {
 	if (k2 === undefined) k2 = k;
 	var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -85,23 +85,30 @@ location: vscode.ProgressLocation.Notification,
 title: "Omni-Agent: Setting up backend dependencies...",
 cancellable: false
 }, async () => {
-const installResult = cp.spawnSync(pythonCommand, ['-m', 'pip', 'install', '--user', '--quiet', '-r', requirementsPath], {
+const reqContent = fs.readFileSync(requirementsPath, 'utf-8');
+const packages = reqContent.split('\n')
+.map(l => l.trim())
+.filter(l => l && !l.startsWith('#'));
+let installed = 0, failed = 0;
+for (const pkg of packages) {
+outputChannel.appendLine('Installing: ' + pkg + '...');
+const installResult = cp.spawnSync(pythonCommand, ['-m', 'pip', 'install', '--user', '--quiet', pkg], {
 cwd: backendDir,
 env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-timeout: 300000,
+timeout: 120000,
 stdio: 'pipe'
 });
-if (installResult.stdout) outputChannel.appendLine(`[pip]: ${installResult.stdout.toString()}`);
-if (installResult.stderr) {
-const errMsg = installResult.stderr.toString();
-if (errMsg && !errMsg.includes('already satisfied')) {
-outputChannel.appendLine(`[pip warn]: ${errMsg}`);
-}
-}
-if (installResult.status !== 0) {
-outputChannel.appendLine(`WARNING: pip install exited with code ${installResult.status}. Backend may fail to start.`);
+if (installResult.status === 0) {
+installed++;
 } else {
-outputChannel.appendLine("Dependencies installed successfully.");
+failed++;
+const errMsg = installResult.stderr ? installResult.stderr.toString().split('\n').slice(-3).join(' ') : 'unknown';
+outputChannel.appendLine('WARNING: Failed to install ' + pkg + ': ' + errMsg);
+}
+}
+outputChannel.appendLine('Dependencies: ' + installed + ' installed, ' + failed + ' failed out of ' + packages.length + ' total.');
+if (failed > 0) {
+outputChannel.appendLine('Some packages failed (e.g. smolagents needs Python 3.10+). Core features may still work.');
 }
 });
 } catch (pipErr) {
