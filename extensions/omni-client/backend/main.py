@@ -186,7 +186,7 @@ async def read_root():
             with open(index_path, "r", encoding="utf-8", errors="ignore") as f:
                 html = f.read()
             identity["has_ide_shell"] = ("editor-container" in html) or ("Monaco" in html) or ("id=\"sidebar\"" in html)
-            identity["has_agent_studio"] = ("Omni-Agent Studio" in html) or ("Sensor Controls" in html) or ("Enable Voice" in html)
+            identity["has_agent_studio"] = ("Omni-Agent Studio" in html) or ("Sensor Controls" in html)
     except Exception as e:
         identity["error"] = str(e)
 

@@ -12,6 +12,7 @@ export const dirs = [
 	'build',
 	'build/vite',
 	'extensions',
+	'extensions/omni-client',
 	'extensions/configuration-editing',
 	'extensions/css-language-features',
 	'extensions/css-language-features/server',
