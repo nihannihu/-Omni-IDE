@@ -2,7 +2,7 @@
   "name": "omni-client",
   "displayName": "Omni Client",
   "description": "AI Bridge for Omni-IDE",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "icon": "logo.png",
   "publisher": "omni-agent",
   "repository": {

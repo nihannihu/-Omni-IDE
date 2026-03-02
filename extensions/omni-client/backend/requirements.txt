@@ -2,7 +2,7 @@ fastapi
 uvicorn
 websockets
 # Agent Framework (Lightweight)
-smolagents[toolkit]
+smolagents
 # Cloud Brain (API Client)
 huggingface_hub
 litellm

@@ -1,8 +1,0 @@
-{
-  "events": [],
-  "aggregates": {
-    "template_runs": {},
-    "planner_executions": {},
-    "insight_acceptance": {}
-  }
-}
