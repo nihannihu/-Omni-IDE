@@ -61,7 +61,7 @@ async function activate(context) {
 			}
 		}
 	}
-	const backendPath = path.join(context.extensionPath, 'backend', 'main.py');
+	const backendPath = path.join(context.extensionPath, 'backend', 'run.py');
 	outputChannel.appendLine(`Backend Path: ${backendPath}`);
 	outputChannel.appendLine(`Python Command: ${pythonCommand}`);
 	const env = { ...process.env, PYTHONIOENCODING: 'utf-8' };
@@ -189,7 +189,7 @@ class OmniChatProvider {
 		const fileContent = activeEditor ? activeEditor.document.getText() : "";
 		const apiKey = await this._secrets.get('omni_gemini_key');
 		try {
-			const healthCheck = await fetch('http://127.0.0.1:7860/api/health', {
+			const healthCheck = await fetch('http://127.0.0.1:8000/api/health', {
 				signal: AbortSignal.timeout(5000)
 			});
 			if (!healthCheck.ok) throw new Error('Backend unhealthy');
@@ -197,7 +197,7 @@ class OmniChatProvider {
 		catch (healthErr) {
 			webviewView.webview.postMessage({
 				command: 'receiveResponse',
-				text: "Python Backend Not Running. The Omni-Agent backend is not reachable. Check the Omni-Agent output channel (View > Output > Omni-Agent) for details."
+				text: "u{23f3} Agent is starting up... Please wait a moment and try again. (Check View > Output > Omni-Agent for details)"
 			});
 			return;
 		}
@@ -205,7 +205,7 @@ class OmniChatProvider {
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 600000);
 		try {
-			const response = await fetch('http://127.0.0.1:7860/api/chat', {
+			const response = await fetch('http://127.0.0.1:8000/api/chat', {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
