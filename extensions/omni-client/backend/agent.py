@@ -715,7 +715,7 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                             "datetime", "math", "random", "time", "json", "re",
                             "subprocess", "os", "sys", "shutil", "glob",  # God Mode imports
                         ],
-                        stream_outputs=True,
+                        stream_outputs=False,
                         executor_kwargs={
                             "additional_functions": {
                                 "safe_write": safe_write,
@@ -811,15 +811,10 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
 
             # --- LLM Runner Definition (Bridge for simple/complex tasks) ---
             def llm_runner(prompt: str) -> str:
-                res = None
                 try:
                     # Re-use the existing `smolagents` loop so `DebugAgent` can still use `safe_write` hooks
-                    for step in self.agent.run(prompt, stream=True):
-                        if type(step).__name__ == "ActionStep" and step.is_final_answer and step.action_output is not None:
-                            res = str(step.action_output)
-                        elif type(step).__name__ == "FinalAnswerStep":
-                            res = str(step.output)
-                    return res or ""
+                    result = self.agent.run(prompt, stream=False)
+                    return str(result) if result else ""
                 except Exception as e:
                     logger.error(f"[LLM RUNNER ERR] {e}")
                     return ""
@@ -1001,22 +996,10 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
         logger.info(f"Context-Aware Task Length: {len(task_to_run)} chars")
 
         try:
-            for step in self.agent.run(task_to_run, stream=True):
-                # Log internals for debugging (NOT sent to frontend)
-                if isinstance(step, ToolCall):
-                    logger.info(f"  Tool: {step.name}")
-                elif isinstance(step, ActionStep):
-                    if step.error:
-                        logger.error(f"  Step Error: {step.error}")
-                    if hasattr(step, "observations") and step.observations:
-                        logger.info(f"  Observation: {step.observations[:200]}...")
-                    if step.is_final_answer and step.action_output is not None:
-                        final_answer = str(step.action_output)
-                elif isinstance(step, FinalAnswerStep):
-                    final_answer = str(step.output)
-                elif isinstance(step, ToolOutput):
-                    logger.info(f"  Tool Output: {str(step.observation)[:200]}...")
-                # ChatMessageStreamDelta is just intermediate thinking - skip
+            # Use stream=False to avoid Python 3.14 + litellm coroutine bug
+            # (litellm's Gemini streaming handler returns a coroutine instead of sync iterator)
+            result = self.agent.run(task_to_run, stream=False)
+            final_answer = str(result) if result else None
 
             if final_answer:
                 yield final_answer
@@ -1048,16 +1031,9 @@ final_answer("Done!")             # WRONG! Must include filenames: "DONE: file.h
                         self.model = cloud_model
                         logger.info(f"☁️ RUNTIME SWAP: Now using {cloud_model.model_id}")
 
-                        # Retry the task with the cloud model
-                        final_answer = None
-                        for step in self.agent.run(task_to_run, stream=True):
-                            if isinstance(step, ActionStep):
-                                if step.error:
-                                    logger.error(f"  Cloud Step Error: {step.error}")
-                                if step.is_final_answer and step.action_output is not None:
-                                    final_answer = str(step.action_output)
-                            elif isinstance(step, FinalAnswerStep):
-                                final_answer = str(step.output)
+                        # Retry the task with the cloud model (non-streaming for Python 3.14 compat)
+                        result = self.agent.run(task_to_run, stream=False)
+                        final_answer = str(result) if result else None
 
                         if final_answer:
                             yield final_answer
