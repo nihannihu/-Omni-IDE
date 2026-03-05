@@ -1053,7 +1053,8 @@ _ACTION_KEYWORDS = frozenset({
     "create", "make", "build", "write", "generate", "scaffold",
     "edit", "modify", "change", "update", "fix", "add", "remove", "delete",
     "run", "execute", "install", "test", "deploy", "refactor",
-    "debug", "/debug", "/explain", "/refactor", "/health", "/insights",
+    "debug", "terminal", "command", "list", "read", "show",
+    "/debug", "/explain", "/refactor", "/health", "/insights",
     "/generate-tasks",
 })
 
@@ -1063,9 +1064,8 @@ def _is_action_task(text: str) -> bool:
     # Slash commands always go to agent
     if text_lower.startswith("/"):
         return True
-    # Check for action keywords
-    words = set(text_lower.split())
-    return bool(words & _ACTION_KEYWORDS)
+    # Check for action keywords (substring match is safer than exact word set)
+    return any(keyword in text_lower for keyword in _ACTION_KEYWORDS)
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest, x_gemini_key: str | None = Header(default=None, alias="X-Gemini-Key")):

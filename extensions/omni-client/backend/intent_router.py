@@ -61,12 +61,22 @@ SCHEMA:
             )
             raw_response = response.choices[0].message.content
 
-            # Parse JSON (with fallback cleanup)
+            # Parse JSON (with robust extraction and cleanup)
             try:
-                parsed_data = json.loads(raw_response)
-            except json.JSONDecodeError:
-                clean = raw_response.replace("```json", "").replace("```", "").strip()
-                parsed_data = json.loads(clean)
+                import re
+                # Extract anything between the first { and the last }
+                match = re.search(r'(\{.*\})', raw_response, re.DOTALL)
+                if match:
+                    json_str = match.group(1)
+                    # Remove common markdown artifact characters if they slipped in
+                    json_str = json_str.replace("```json", "").replace("```", "").strip()
+                    parsed_data = json.loads(json_str)
+                else:
+                    # Fallback to direct parse if no brackets found
+                    parsed_data = json.loads(raw_response)
+            except Exception as json_err:
+                logger.error(f"JSON Parse failed: {json_err}. Raw: {raw_response[:100]}")
+                return self._heuristic_fallback(query)
 
         except Exception as e:
             logger.error(f"Routing failed due to LLM error: {e}. Falling back to heuristics.")
@@ -109,8 +119,8 @@ SCHEMA:
     def _heuristic_fallback(self, query: str) -> Dict[str, Any]:
         """Pure keyword-based routing when LLM is unavailable."""
         query_lower = query.lower()
-        complex_keywords = ["create", "build", "implement", "scaffold", "make", "setup", "complete"]
-        complexity_signals = ["game", "app", "dashboard", "page", "system", "feature", "module"]
+        complex_keywords = ["create", "build", "implement", "scaffold", "make", "setup", "complete", "run", "execute", "terminal", "command", "list", "read", "show"]
+        complexity_signals = ["game", "app", "dashboard", "page", "system", "feature", "module", "file", "folder", "directory", "code"]
 
         is_complex = any(k in query_lower for k in complex_keywords) and \
                      any(s in query_lower for s in complexity_signals)
