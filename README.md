@@ -10,6 +10,16 @@ Developed by **Mohammed Nihan (Nihan Nihu)**, a Computer Science student at **VT
 
 ---
 
+## 📈 Impact & Growth
+Upon the release of v3.0.0, Omni-IDE experienced massive community validation, recording **7,355 automated and manual clones** from **158 unique engineers** within a 14-day window.
+
+<p align="center">
+  <img src="assets/tic.png" alt="GitHub Traffic Insights" width="800" />
+</p>
+
+---
+
+
 ## 🛠️ Cutting-Edge Tech Stack (v3.0.0)
 
 Omni-IDE is built with a focus on performance, scalability, and intelligence:
