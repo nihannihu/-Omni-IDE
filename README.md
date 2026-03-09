@@ -12,19 +12,19 @@ Developed by **Mohammed Nihan (Nihan Nihu)**, a Computer Science student at **VT
 
 ## 🚀 v3.0.0 Launch Impact & Community Validation
 
-> **7,355 Clones | 158 Unique Engineers | 14 Days**
+> **9,866 Clones | 148 Unique Engineers | 14 Days**
 
 The release of the Omni-IDE v3.0 Agentic Core sparked a massive response from the global open-source community. Within the first two weeks of launch, the repository experienced an overwhelming volume of automated and manual pulls, validating the stability of our self-healing sandbox under real-world CI/CD stress.
 
 <div align="center">
-  <img src="assets/tic.png" alt="Omni-IDE v3.0.0 GitHub Analytics showing 7,355 clones" width="800"/>
+  <img src="assets/clone.png" alt="Omni-IDE v3.0.0 GitHub Analytics showing 9,866 clones" width="800"/>
   <br>
   <em>GitHub Insights snapshot from March 2026, permanently capturing the v3.0.0 viral growth spike.</em>
 </div>
 
 ### 📊 The Analytics Breakdown
-* **7,355 Total Clones:** High-frequency pulls indicating that the IDE is being actively integrated into automated deployment pipelines and containerized testing environments.
-* **158 Unique Cloners:** A dedicated core of early adopters actively building with and stress-testing the Gemini + Ollama hybrid decision engine.
+* **9,866 Total Clones:** High-frequency pulls indicating that the IDE is being actively integrated into automated deployment pipelines and containerized testing environments.
+* **148 Unique Cloners:** A dedicated core of early adopters actively building with and stress-testing the Gemini + Ollama hybrid decision engine.
 * **Hardened Execution:** The security sandbox successfully handled thousands of autonomous terminal actions while maintaining strict isolation from host operating systems.
 
 ### 🤝 Acknowledgment
