@@ -12,19 +12,19 @@ Developed by **Mohammed Nihan (Nihan Nihu)**, a Computer Science student at **VT
 
 ## 🚀 v3.0.0 Launch Impact & Community Validation
 
-> **14,736 Clones | 130 Unique Engineers | 14 Days**
+> **15,795 Clones | 124 Unique Engineers | 14 Days**
 
-The release of the Omni-IDE v3.0 Agentic Core sparked a massive response from the global open-source community. Within the first two weeks of launch, the repository crossed the **14,500+ clone milestone**, validating the stability of our self-healing sandbox under real-world CI/CD stress.
+The release of the Omni-IDE v3.0 Agentic Core sparked a massive response from the global open-source community. Within the first two weeks of launch, the repository crossed the **15,500+ clone milestone**, validating the stability of our self-healing sandbox under real-world CI/CD stress.
 
 <div align="center">
-  <img src="assets/updatedgitclone.png" alt="Omni-IDE v3.0.0 GitHub Analytics showing 14,736 clones" width="800"/>
+  <img src="assets/15kgitclone.png" alt="Omni-IDE v3.0.0 GitHub Analytics showing 15,795 clones" width="800"/>
   <br>
   <em>GitHub Insights snapshot from March 2026, permanently capturing the v3.0.0 viral growth spike.</em>
 </div>
 
 ### 📊 The Analytics Breakdown
-* **14,736 Total Clones:** Phenomenal growth from our previous 13.5k milestone, reflecting a massive influx of production-ready integrations globally.
-* **130 Unique Cloners:** A consistent, high-engagement pulse of engineers deeply integrating the Gemini-powered agent into their core workflows.
+* **15,795 Total Clones:** Incredible momentum, growing from 7.3k → 9.8k → 11k → 12.2k → 13.5k → 14.7k → **15.7k**. This reflects the deepening roots of Omni-IDE in the agentic development ecosystem.
+* **124 Unique Cloners:** A high-quality segment of power users and contributors stress-testing the autonomous Self-Healing Protocol.
 * **Hardened Execution:** The security sandbox successfully handled thousands of autonomous terminal actions while maintaining strict isolation from host operating systems.
 
 ### 🤝 Acknowledgment
